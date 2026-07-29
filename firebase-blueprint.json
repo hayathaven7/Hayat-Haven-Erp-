@@ -1,0 +1,572 @@
+import { SalesOrder, CompanySettings } from '../types/erp';
+
+// Global reference for Web Bluetooth device & GATT characteristic
+let bluetoothDevice: any = null;
+let printerCharacteristic: any = null;
+
+export const isWebBluetoothSupported = (): boolean => {
+  return typeof window !== 'undefined' && 'bluetooth' in navigator;
+};
+
+export const getConnectedDeviceName = (): string | null => {
+  if (bluetoothDevice && bluetoothDevice.gatt && bluetoothDevice.gatt.connected) {
+    return bluetoothDevice.name || 'Bluetooth POS Printer';
+  }
+  return null;
+};
+
+export const disconnectBluetoothPrinter = (): void => {
+  if (bluetoothDevice && bluetoothDevice.gatt && bluetoothDevice.gatt.connected) {
+    try {
+      bluetoothDevice.gatt.disconnect();
+    } catch (e) {
+      console.error('Error disconnecting Bluetooth printer:', e);
+    }
+  }
+  bluetoothDevice = null;
+  printerCharacteristic = null;
+};
+
+export const isInIframe = (): boolean => {
+  try {
+    return window.self !== window.top;
+  } catch (e) {
+    return true;
+  }
+};
+
+// Helper function to sanitize text for ESC/POS Thermal Printers
+// Prevents Chinese / garbled characters by replacing non-ASCII Unicode (like ৳, Bengali characters) with clean printable ASCII
+export const cleanTextForPOS = (text: string | undefined | null): string => {
+  if (!text) return '';
+
+  let str = String(text);
+
+  // Replace Bengali Currency symbol ৳ with Tk.
+  str = str.replace(/৳/g, 'Tk.');
+
+  // Map Bengali numerals to English digits
+  const bDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
+  for (let i = 0; i < 10; i++) {
+    str = str.replace(new RegExp(bDigits[i], 'g'), String(i));
+  }
+
+  // Common Bengali term replacements for POS printing
+  const map: { [key: string]: string } = {
+    'ওয়াক-ইন কাস্টমার': 'Walk-in Customer',
+    'ক্যাশ': 'CASH',
+    'ডিউ': 'DUE',
+    'পেইড': 'PAID',
+    'পার্শিয়াল': 'PARTIAL',
+    'মেমো': 'MEMO',
+    'ইনভয়েস': 'INVOICE',
+    'তারিখ': 'Date',
+    'গ্রাহক': 'Customer',
+    'ফোন': 'Phone',
+    'মোট': 'Total',
+    'ডিসকাウント': 'Discount',
+    'ডিসকাউন্ট': 'Discount',
+    'ডেলিভারি': 'Delivery',
+    'ধন্যবাদ': 'Thank You',
+  };
+
+  for (const [bWord, eWord] of Object.entries(map)) {
+    str = str.replace(new RegExp(bWord, 'g'), eWord);
+  }
+
+  // Remove diacritics and strip non-ASCII characters that cause GBK/Chinese printer garbling
+  str = str
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\x00-\x7F]/g, '') // Strips any non-ASCII Unicode bytes
+    .trim();
+
+  return str;
+};
+
+// Auto Reconnect to previously paired Bluetooth device on refresh
+export const autoConnectBluetoothPrinter = async (): Promise<{
+  success: boolean;
+  deviceName?: string;
+  message: string;
+}> => {
+  if (!isWebBluetoothSupported() || !('getDevices' in (navigator as any).bluetooth)) {
+    return { success: false, message: 'Auto-reconnect is not supported on this browser.' };
+  }
+
+  // If already connected
+  if (bluetoothDevice && bluetoothDevice.gatt && bluetoothDevice.gatt.connected && printerCharacteristic) {
+    return {
+      success: true,
+      deviceName: bluetoothDevice.name || 'Bluetooth POS Printer',
+      message: `কানেক্টেড: ${bluetoothDevice.name || 'Bluetooth POS Printer'}`,
+    };
+  }
+
+  try {
+    const devices = await (navigator as any).bluetooth.getDevices();
+    if (!devices || devices.length === 0) {
+      return { success: false, message: 'পূর্বে যুক্ত থাকা কোনো ব্লুটুথ ডিভাইস পাওয়া যায়নি।' };
+    }
+
+    const device = devices[0];
+    bluetoothDevice = device;
+
+    device.addEventListener('gattserverdisconnected', () => {
+      printerCharacteristic = null;
+      console.log('Bluetooth Printer Disconnected');
+    });
+
+    const server = await device.gatt.connect();
+    const services = await server.getPrimaryServices();
+
+    if (!services || services.length === 0) {
+      return { success: false, message: 'প্রিন্টারে সার্ভিস সার্ভিস পাওয়া যায়নি।' };
+    }
+
+    for (const service of services) {
+      const characteristics = await service.getCharacteristics();
+      for (const char of characteristics) {
+        if (char.properties.write || char.properties.writeWithoutResponse) {
+          printerCharacteristic = char;
+          break;
+        }
+      }
+      if (printerCharacteristic) break;
+    }
+
+    if (!printerCharacteristic) {
+      return { success: false, message: 'রাইট ক্যারেক্টারিস্টিক পাওয়া যায়নি।' };
+    }
+
+    return {
+      success: true,
+      deviceName: device.name || 'Bluetooth POS Printer',
+      message: `অটো পুনঃকানেক্টেড: ${device.name || 'Bluetooth POS Printer'}`,
+    };
+  } catch (err: any) {
+    console.warn('Auto reconnect bluetooth error:', err);
+    return { success: false, message: 'অটো কানেকশন চেষ্টা ব্যর্থ হয়েছে।' };
+  }
+};
+
+export const connectBluetoothPrinter = async (): Promise<{
+  success: boolean;
+  deviceName?: string;
+  message: string;
+  isPermissionsBlocked?: boolean;
+}> => {
+  if (!isWebBluetoothSupported()) {
+    return {
+      success: false,
+      message: 'আপনার ব্রাউজার বা ডিভাইসে Web Bluetooth API সমর্থিত নয়। সাধারণ প্রিন্ট (window.print) বা RawBT অ্যাপ ব্যবহার করুন।',
+    };
+  }
+
+  try {
+    // Standard POS printer GATT services & custom transparent serial UUIDs
+    const optionalServices = [
+      '000018f0-0000-1000-8000-00805f9b34fb', // Standard Printer
+      '0000ff00-0000-1000-8000-00805f9b34fb', // Custom POS
+      '49535343-fe7d-4ae5-8fa9-9fafd205e455', // ISSC Serial
+      'e7810a71-73ae-499d-8c15-faa9aef0c3f2', // SPP Service
+    ];
+
+    const device = await (navigator as any).bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices,
+    });
+
+    if (!device) {
+      return { success: false, message: 'কোনো ডিভাইস সিলেক্ট করা হয়নি।' };
+    }
+
+    bluetoothDevice = device;
+
+    // Listen for disconnection
+    device.addEventListener('gattserverdisconnected', () => {
+      printerCharacteristic = null;
+      console.log('Bluetooth Printer Disconnected');
+    });
+
+    const server = await device.gatt.connect();
+    const services = await server.getPrimaryServices();
+
+    if (!services || services.length === 0) {
+      return { success: false, message: 'প্রিন্টারে কোনো প্রাইমারি সার্ভিস পাওয়া যায়নি।' };
+    }
+
+    // Search for a writable characteristic
+    for (const service of services) {
+      const characteristics = await service.getCharacteristics();
+      for (const char of characteristics) {
+        if (char.properties.write || char.properties.writeWithoutResponse) {
+          printerCharacteristic = char;
+          break;
+        }
+      }
+      if (printerCharacteristic) break;
+    }
+
+    if (!printerCharacteristic) {
+      return {
+        success: false,
+        message: `প্রিন্টার "${device.name || 'POS Printer'}" কানেক্ট হয়েছে কিন্তু রাইট ক্যারেক্টারিস্টিক পাওয়া যায়নি।`,
+      };
+    }
+
+    return {
+      success: true,
+      deviceName: device.name || 'Bluetooth POS Printer',
+      message: `কানেক্টেড: ${device.name || 'Bluetooth POS Printer'}`,
+    };
+  } catch (error: any) {
+    const errStr = String(error?.message || error);
+
+    // Handle user cancellation gracefully without logging error
+    if (
+      errStr.includes('User cancelled') ||
+      errStr.includes('cancelled') ||
+      error?.name === 'NotFoundError' ||
+      error?.name === 'SecurityError' && errStr.includes('User cancelled')
+    ) {
+      console.log('Bluetooth pairing cancelled by user');
+      return {
+        success: false,
+        message: 'ডিভাইস নির্বাচন বাতিল করা হয়েছে। আবার কানেক্ট করতে বাটনটিতে চাপ দিয়ে তালিকার প্রিন্টারটি নির্বাচন করুন।',
+      };
+    }
+
+    console.error('Bluetooth connection error:', error);
+
+    if (errStr.includes('permissions policy') || errStr.includes('disallowed') || isInIframe()) {
+      return {
+        success: false,
+        isPermissionsBlocked: true,
+        message: 'আইফ্রেম (iFrame) সিকিউরিটি পলিসির কারণে প্রিভিউতে ওয়েব ব্লুটুথ এক্সেস ব্লকড। নতুন ট্যাবে অ্যাপটি ওপেন করুন অথবা RawBT অ্যাপ দিয়ে ১-ক্লিকে প্রিন্ট করুন!',
+      };
+    }
+
+    return {
+      success: false,
+      message: error.message || 'ব্লুটুথ কানেকশনে ত্রুটি ঘটেছে।',
+    };
+  }
+};
+
+// RawBT Android App URL Generator (bypasses Web Bluetooth permissions policy on mobile/tablets)
+export const generateRawBTDataUrl = (
+  order: SalesOrder,
+  companySettings: CompanySettings,
+  paperSize: 'pos2in' | 'pos3in' = 'pos3in'
+): string => {
+  const is2Inch = paperSize === 'pos2in';
+  const width = is2Inch ? 32 : 48;
+
+  const lineDivider = '-'.repeat(width) + '\n';
+  const doubleDivider = '='.repeat(width) + '\n';
+
+  const companyName = cleanTextForPOS(companySettings.companyName) || 'HAYAT HAVEN';
+  const companyAddress = cleanTextForPOS(companySettings.address);
+  const customerName = cleanTextForPOS(order.customerName) || 'Walk-in Customer';
+
+  let text = '';
+  text += `${companyName}\n`;
+  if (companyAddress) text += `${companyAddress}\n`;
+  text += `Phone: ${companySettings.phone}\n`;
+  text += doubleDivider;
+
+  text += `MEMO / INVOICE: ${order.id}\n`;
+  text += `Date: ${order.orderDate}\n`;
+  text += `Customer: ${customerName}\n`;
+  if (order.customerPhone) text += `Phone: ${order.customerPhone}\n`;
+  text += lineDivider;
+
+  for (const item of order.items) {
+    const rawName = item.productName || item.productId || 'Item';
+    const cleanName = cleanTextForPOS(rawName) || 'Item';
+    const name = cleanName.substring(0, is2Inch ? 14 : 20);
+    const qty = String(item.quantity);
+    const price = `Tk.${item.unitPrice}`;
+    const total = `Tk.${item.totalPrice}`;
+
+    if (is2Inch) {
+      text += `${name.padEnd(14)} ${qty.padStart(3)} ${price.padStart(7)} ${total.padStart(8)}\n`;
+    } else {
+      text += `${name.padEnd(22)} ${qty.padStart(4)} ${price.padStart(9)} ${total.padStart(11)}\n`;
+    }
+  }
+
+  text += lineDivider;
+  text += `Subtotal: Tk.${order.subtotal.toLocaleString()}\n`;
+  if (order.discountAmount > 0) text += `Discount: -Tk.${order.discountAmount.toLocaleString()}\n`;
+  if (order.deliveryCharge > 0) text += `Delivery: +Tk.${order.deliveryCharge.toLocaleString()}\n`;
+  text += doubleDivider;
+  text += `GRAND TOTAL: Tk.${order.grandTotal.toLocaleString()}\n`;
+  text += `Paid: Tk.${order.advancePaid.toLocaleString()}\n`;
+  text += `DUE: Tk.${order.dueAmount.toLocaleString()}\n`;
+  text += lineDivider;
+  text += `STATUS: ${order.paymentStatus.toUpperCase()}\n\n`;
+  text += 'Thank you for shopping with us!\n\n\n';
+
+  // Base64 encode for rawbt:base64 scheme
+  const b64 = btoa(unescape(encodeURIComponent(text)));
+  return `rawbt:base64,${b64}`;
+};
+
+// Send chunked binary ESC/POS data to Bluetooth printer with auto-reconnect recovery
+const sendESCDataToPrinter = async (data: Uint8Array): Promise<void> => {
+  if (!bluetoothDevice) {
+    throw new Error('ব্লুটুথ প্রিন্টার ডিভাইসের সাথে সংযোগ পাওয়া যায়নি।');
+  }
+
+  // Auto-reconnect GATT server if connection dropped
+  if (!bluetoothDevice.gatt || !bluetoothDevice.gatt.connected || !printerCharacteristic) {
+    console.log('Bluetooth connection dropped. Attempting quick auto-reconnect...');
+    try {
+      const server = await bluetoothDevice.gatt.connect();
+      const services = await server.getPrimaryServices();
+      printerCharacteristic = null;
+
+      for (const service of services) {
+        const characteristics = await service.getCharacteristics();
+        for (const char of characteristics) {
+          if (char.properties.write || char.properties.writeWithoutResponse) {
+            printerCharacteristic = char;
+            break;
+          }
+        }
+        if (printerCharacteristic) break;
+      }
+    } catch (reconnErr) {
+      console.error('Failed to auto-reconnect Bluetooth printer:', reconnErr);
+      throw new Error('ব্লুটুথ প্রিন্টার এর সাথে সংযোগ বিচ্ছিন হয়ে গিয়েছে। অনুগ্রহ করে আবার কানেক্ট বাটন চাপুন।');
+    }
+  }
+
+  if (!printerCharacteristic) {
+    throw new Error('ব্লুটুথ প্রিন্টারে রাইট ক্যারেক্টারিস্টিক পাওয়া যায়নি!');
+  }
+
+  // Chunk buffer size (20 bytes per BLE packet for maximum BLE device compatibility)
+  const CHUNK_SIZE = 20;
+  for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+    const chunk = data.slice(i, i + CHUNK_SIZE);
+    try {
+      if (printerCharacteristic.properties.writeWithoutResponse) {
+        await printerCharacteristic.writeValueWithoutResponse(chunk);
+      } else {
+        await printerCharacteristic.writeValue(chunk);
+      }
+    } catch (writeErr) {
+      console.warn('Chunk write error, retrying packet...', writeErr);
+      await new Promise((res) => setTimeout(res, 50));
+      if (printerCharacteristic.properties.writeWithoutResponse) {
+        await printerCharacteristic.writeValueWithoutResponse(chunk);
+      } else {
+        await printerCharacteristic.writeValue(chunk);
+      }
+    }
+    // Delay between chunks to avoid BLE buffer queue overflow
+    await new Promise((res) => setTimeout(res, 25));
+  }
+};
+
+// Format sales order into ESC/POS thermal text command stream for 2 inch (58mm / 32 char) or 3 inch (80mm / 48 char)
+export const printSalesOrderBluetooth = async (
+  order: SalesOrder,
+  companySettings: CompanySettings,
+  paperSize: 'pos2in' | 'pos3in' = 'pos3in'
+): Promise<{ success: boolean; message: string }> => {
+  // Auto-reconnect if device reference exists but GATT connection dropped
+  if (!printerCharacteristic || !bluetoothDevice || !bluetoothDevice.gatt?.connected) {
+    if (bluetoothDevice) {
+      try {
+        console.log('Reconnecting Bluetooth Printer...');
+        const server = await bluetoothDevice.gatt.connect();
+        const services = await server.getPrimaryServices();
+        for (const service of services) {
+          const characteristics = await service.getCharacteristics();
+          for (const char of characteristics) {
+            if (char.properties.write || char.properties.writeWithoutResponse) {
+              printerCharacteristic = char;
+              break;
+            }
+          }
+          if (printerCharacteristic) break;
+        }
+      } catch (reconErr) {
+        console.warn('Bluetooth auto-reconnect failed:', reconErr);
+      }
+    }
+  }
+
+  if (!printerCharacteristic || !bluetoothDevice || !bluetoothDevice.gatt?.connected) {
+    return {
+      success: false,
+      message: 'ব্লুটুথ প্রিন্টার কানেক্ট করা নেই! আগে ব্লুটুথ কানেক্ট বাটন চেপে কানেক্ট করুন।',
+    };
+  }
+
+  try {
+    const is2Inch = paperSize === 'pos2in';
+    const width = is2Inch ? 32 : 48; // Max characters per line
+
+    // ESC/POS Commands
+    const ESC_INIT = '\x1b\x40'; // Initialize
+    const ESC_CODEPAGE_437 = '\x1b\x74\x00'; // Set PC437 Code Page (Standard ASCII)
+    const ESC_ALIGN_CENTER = '\x1b\x61\x01';
+    const ESC_ALIGN_LEFT = '\x1b\x61\x00';
+    const ESC_ALIGN_RIGHT = '\x1b\x61\x02';
+    const ESC_TXT_BOLD_ON = '\x1b\x45\x01';
+    const ESC_TXT_BOLD_OFF = '\x1b\x45\x00';
+    const ESC_TXT_DOUBLE = '\x1b\x21\x30'; // Double height + width
+    const ESC_TXT_NORMAL = '\x1b\x21\x00'; // Normal font
+    const ESC_CUT_PAPER = '\x1d\x56\x00'; // Paper Cut
+
+    const lineDivider = '-'.repeat(width) + '\n';
+    const doubleDivider = '='.repeat(width) + '\n';
+
+    const companyName = cleanTextForPOS(companySettings.companyName) || 'HAYAT HAVEN';
+    const businessType = cleanTextForPOS(companySettings.businessType);
+    const companyAddress = cleanTextForPOS(companySettings.address);
+    const customerName = cleanTextForPOS(order.customerName) || 'Walk-in Customer';
+
+    let printText = '';
+
+    // Header (Centered)
+    printText += ESC_INIT;
+    printText += ESC_CODEPAGE_437;
+    printText += ESC_ALIGN_CENTER;
+    printText += ESC_TXT_BOLD_ON + ESC_TXT_DOUBLE;
+    printText += companyName.substring(0, 24) + '\n';
+    printText += ESC_TXT_NORMAL + ESC_TXT_BOLD_OFF;
+    if (businessType) {
+      printText += businessType.substring(0, width) + '\n';
+    }
+    if (companyAddress) {
+      printText += companyAddress.substring(0, width) + '\n';
+    }
+    if (companySettings.taxId && companySettings.taxId.trim() !== '' && companySettings.taxId !== 'N/A') {
+      printText += `BIN: ${companySettings.taxId}\n`;
+    }
+    printText += `Phone: ${companySettings.phone}\n`;
+    printText += doubleDivider;
+
+    // Order Info
+    printText += ESC_ALIGN_LEFT;
+    printText += ESC_TXT_BOLD_ON;
+    printText += `MEMO / INVOICE: ${order.id}\n`;
+    printText += ESC_TXT_BOLD_OFF;
+    printText += `Date: ${order.orderDate}\n`;
+    printText += `Customer: ${customerName}\n`;
+    if (order.customerPhone) printText += `Phone: ${order.customerPhone}\n`;
+    if (order.orderType) printText += `Type: ${order.orderType}\n`;
+    printText += lineDivider;
+
+    // Table Header
+    if (is2Inch) {
+      printText += ESC_TXT_BOLD_ON;
+      printText += 'ITEM            QTY   PRICE   TOTAL\n';
+      printText += ESC_TXT_BOLD_OFF;
+    } else {
+      printText += ESC_TXT_BOLD_ON;
+      printText += 'ITEM DESCRIPTION       QTY    PRICE     TOTAL\n';
+      printText += ESC_TXT_BOLD_OFF;
+    }
+    printText += lineDivider;
+
+    // Line Items
+    for (const item of order.items) {
+      const rawName = item.productName || item.productId || 'Item';
+      const cleanName = cleanTextForPOS(rawName) || 'Item';
+      const qty = String(item.quantity);
+      const price = `Tk.${item.unitPrice.toLocaleString()}`;
+      const total = `Tk.${item.totalPrice.toLocaleString()}`;
+
+      if (is2Inch) {
+        // 2 Inch (32 chars): Print item name on line 1, and qty x price = total on line 2
+        printText += `${cleanName.substring(0, 32)}\n`;
+        const detailStr = `  ${qty} x ${price}`;
+        const spaceLen = Math.max(1, 32 - detailStr.length - total.length);
+        printText += `${detailStr}${' '.repeat(spaceLen)}${total}\n`;
+      } else {
+        // 3 Inch (48 chars): Item name (22), Qty (4), Price (10), Total (11)
+        if (cleanName.length > 22) {
+          printText += `${cleanName.substring(0, 48)}\n`;
+          const detailStr = `  ${qty} x ${price}`;
+          const spaceLen = Math.max(1, 48 - detailStr.length - total.length);
+          printText += `${detailStr}${' '.repeat(spaceLen)}${total}\n`;
+        } else {
+          const leftPart = cleanName.padEnd(22, ' ');
+          const qtyPart = qty.padStart(4, ' ');
+          const pricePart = price.padStart(10, ' ');
+          const totalPart = total.padStart(11, ' ');
+          printText += `${leftPart} ${qtyPart} ${pricePart} ${totalPart}\n`;
+        }
+      }
+    }
+
+    printText += lineDivider;
+
+    // Totals Calculation - Guarantees value never wraps to next line
+    const formatLine = (label: string, value: string) => {
+      const totalLen = label.length + value.length;
+      if (totalLen >= width) {
+        const maxLabelLen = Math.max(4, width - value.length - 1);
+        const trLabel = label.substring(0, maxLabelLen);
+        const spaceLen = Math.max(1, width - trLabel.length - value.length);
+        return `${trLabel}${' '.repeat(spaceLen)}${value}\n`;
+      }
+      const spaceLen = width - totalLen;
+      return `${label}${' '.repeat(spaceLen)}${value}\n`;
+    };
+
+    printText += formatLine('Subtotal:', `Tk.${order.subtotal.toLocaleString()}`);
+    if (order.discountAmount > 0) {
+      printText += formatLine('Discount:', `-Tk.${order.discountAmount.toLocaleString()}`);
+    }
+    if (order.deliveryCharge > 0) {
+      printText += formatLine('Delivery Charge:', `+Tk.${order.deliveryCharge.toLocaleString()}`);
+    }
+    printText += doubleDivider;
+    printText += ESC_TXT_BOLD_ON;
+    printText += formatLine('GRAND TOTAL:', `Tk.${order.grandTotal.toLocaleString()}`);
+    printText += formatLine('Advance Paid:', `Tk.${order.advancePaid.toLocaleString()}`);
+    printText += formatLine('BALANCE DUE:', `Tk.${order.dueAmount.toLocaleString()}`);
+    printText += ESC_TXT_BOLD_OFF;
+    printText += lineDivider;
+
+    // Footer
+    const servedBy = cleanTextForPOS(order.createdBy) || 'Admin';
+    printText += ESC_ALIGN_CENTER;
+    printText += `STATUS: ${order.paymentStatus.toUpperCase()}\n`;
+    printText += `Served By: ${servedBy} (Auto Detected)\n`;
+    printText += 'Thank you for shopping with us!\n';
+    printText += 'fb.com/hayathaven7\n\n';
+
+    // Clean Footer Text & Safe Paper Feed (ESC d 4 feeds paper safely without hardware disconnects)
+    printText += 'Scan / Visit Facebook Page:\n';
+    printText += 'fb.com/hayathaven7\n';
+    printText += '\n\n'; // Feed lines of paper
+    printText += '\x1b\x64\x04'; // ESC d 4: Safe feed 4 lines (compatible with all POS printers)
+
+    // Encode text buffer safely
+    const encoder = new TextEncoder();
+    const finalBuffer = encoder.encode(printText);
+
+    // Send binary ESC/POS data via Bluetooth
+    await sendESCDataToPrinter(finalBuffer);
+
+    return {
+      success: true,
+      message: `✅ Bluetooth Thermal POS Memo #${order.id} sent to printer!`,
+    };
+  } catch (err: any) {
+    console.error('Error sending Bluetooth print job:', err);
+    return {
+      success: false,
+      message: `ব্লুটুথ প্রিন্ট ট্রান্সফারে ত্রুটি: ${err.message || 'Unknown error'}`,
+    };
+  }
+};

@@ -1,0 +1,774 @@
+import React, { useState } from 'react';
+import {
+  ArrowLeft,
+  CheckCircle,
+  Clock,
+  Download,
+  Edit2,
+  FileText,
+  Filter,
+  Layers,
+  Mail,
+  MessageSquare,
+  Plus,
+  Printer,
+  RefreshCw,
+  Search,
+  Send,
+  Trash2,
+  XCircle,
+} from 'lucide-react';
+import { useERP } from '../../context/ERPContext';
+import { Quotation } from '../../types/erp';
+import { NewQuotationModal } from '../NewQuotationModal';
+import {
+  downloadInvoicePDF,
+  openWhatsAppQuotation,
+} from '../../utils/shareUtils';
+
+type ViewMode = 'list' | 'print';
+
+export const QuotationsModule: React.FC = () => {
+  const {
+    quotations,
+    updateQuotation,
+    deleteQuotation,
+    convertQuotationToOrder,
+    companySettings,
+    customers,
+    activeUser,
+    setActiveModule,
+  } = useERP();
+
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [selectedQuotation, setSelectedQuotation] = useState<Quotation | null>(
+    quotations[0] || null
+  );
+  const [filterStatus, setFilterStatus] = useState<string>('All');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [quotationToEdit, setQuotationToEdit] = useState<Quotation | null>(null);
+
+  // Batch selection state
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [paperSize, setPaperSize] = useState<'a4' | 'a5'>('a4');
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+
+  // Deletion and conversion confirmation states
+  const [deletingQuotationId, setDeletingQuotationId] = useState<string | null>(null);
+  const [isBatchDeleting, setIsBatchDeleting] = useState(false);
+  const [convertingQuotationId, setConvertingQuotationId] = useState<string | null>(null);
+
+  // Filtering
+  const filteredQuotations = quotations.filter((q) => {
+    const matchesStatus = filterStatus === 'All' || q.status === filterStatus;
+    const matchesSearch =
+      q.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (q.customerName && q.customerName.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (q.customerPhone && q.customerPhone.includes(searchQuery));
+    return matchesStatus && matchesSearch;
+  });
+
+  // Batch Selection Handlers
+  const toggleSelectAll = () => {
+    if (selectedIds.length === filteredQuotations.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(filteredQuotations.map((q) => q.id));
+    }
+  };
+
+  const toggleSelectOne = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+    );
+  };
+
+  const handleBatchDelete = () => {
+    if (selectedIds.length === 0) return;
+    setIsBatchDeleting(true);
+  };
+
+  const confirmBatchDeleteAction = () => {
+    selectedIds.forEach((id) => deleteQuotation(id));
+    setSelectedIds([]);
+    setIsBatchDeleting(false);
+  };
+
+  const handleBatchMarkStatus = (status: Quotation['status']) => {
+    if (selectedIds.length === 0) return;
+    selectedIds.forEach((id) => {
+      const target = quotations.find((q) => q.id === id);
+      if (target) {
+        updateQuotation({ ...target, status });
+      }
+    });
+    setSelectedIds([]);
+  };
+
+  const handleOpenPrintView = (q: Quotation) => {
+    setSelectedQuotation(q);
+    setViewMode('print');
+  };
+
+  const handleConvertOrder = (qId: string) => {
+    setConvertingQuotationId(qId);
+  };
+
+  const confirmConvertOrderAction = () => {
+    if (convertingQuotationId) {
+      convertQuotationToOrder(convertingQuotationId);
+      setConvertingQuotationId(null);
+    }
+  };
+
+  const handlePDFDownload = async () => {
+    if (!selectedQuotation) return;
+    setIsGeneratingPDF(true);
+    await downloadInvoicePDF('printable-quotation-canvas', `Quotation_${selectedQuotation.id}.pdf`);
+    setIsGeneratingPDF(false);
+  };
+
+  const handleWhatsApp = (q: Quotation) => {
+    const cust = customers.find((c) => c.id === q.customerId);
+    openWhatsAppQuotation(q, cust, companySettings);
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Module Header Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+        <div>
+          <div className="flex items-center gap-2">
+            <FileText className="h-5 w-5 text-blue-900" />
+            <h1 className="text-lg font-black text-slate-900">
+              Quotation & Price Estimates (কোটেশন পত্র)
+            </h1>
+          </div>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Create professional price quotes, send via WhatsApp/PDF, and convert to Sales Orders in 1-click.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {viewMode === 'print' ? (
+            <button
+              onClick={() => setViewMode('list')}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>Back to Quotation List</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                setQuotationToEdit(null);
+                setIsModalOpen(true);
+              }}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-900 hover:bg-blue-800 text-white text-xs font-bold transition-all cursor-pointer shadow-md"
+            >
+              <Plus className="h-4 w-4" />
+              <span>New Quotation (নতুন কোটেশন)</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {viewMode === 'list' ? (
+        <>
+          {/* Summary Stats */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-1">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Quotes</span>
+              <p className="text-xl font-black text-slate-900">{quotations.length}</p>
+            </div>
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-1">
+              <span className="text-[10px] font-bold text-amber-600 uppercase tracking-wider">Sent / Pending</span>
+              <p className="text-xl font-black text-amber-700">
+                {quotations.filter((q) => q.status === 'Sent' || q.status === 'Draft').length}
+              </p>
+            </div>
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-1">
+              <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Accepted Quotes</span>
+              <p className="text-xl font-black text-emerald-700">
+                {quotations.filter((q) => q.status === 'Accepted').length}
+              </p>
+            </div>
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-1">
+              <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider">Converted to Orders</span>
+              <p className="text-xl font-black text-blue-900">
+                {quotations.filter((q) => q.status === 'Converted').length}
+              </p>
+            </div>
+          </div>
+
+          {/* Action Toolbar & Filters */}
+          <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+              {/* Filter Tabs */}
+              <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
+                {['All', 'Sent', 'Accepted', 'Converted', 'Rejected', 'Draft'].map((status) => (
+                  <button
+                    key={status}
+                    onClick={() => setFilterStatus(status)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      filterStatus === status
+                        ? 'bg-blue-900 text-white shadow-xs'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {status}
+                  </button>
+                ))}
+              </div>
+
+              {/* Search Bar */}
+              <div className="relative w-full sm:w-64">
+                <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search Quote # or Client..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            {/* Batch Mark Bar */}
+            {selectedIds.length > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-blue-50 border border-blue-200 rounded-xl animate-fade-in">
+                <span className="text-xs font-bold text-blue-900">
+                  {selectedIds.length} quotation(s) selected
+                </span>
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="font-semibold text-slate-600 mr-1">Mark As:</span>
+                  <button
+                    onClick={() => handleBatchMarkStatus('Sent')}
+                    className="px-2.5 py-1 rounded-lg bg-amber-600 text-white font-bold cursor-pointer hover:bg-amber-500"
+                  >
+                    Mark Sent
+                  </button>
+                  <button
+                    onClick={() => handleBatchMarkStatus('Accepted')}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold cursor-pointer hover:bg-emerald-500"
+                  >
+                    Mark Accepted
+                  </button>
+                  <button
+                    onClick={() => handleBatchMarkStatus('Rejected')}
+                    className="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-bold cursor-pointer hover:bg-rose-500"
+                  >
+                    Mark Rejected
+                  </button>
+                  <button
+                    onClick={handleBatchDelete}
+                    className="px-2.5 py-1 rounded-lg bg-red-700 text-white font-bold cursor-pointer hover:bg-red-600 ml-2"
+                  >
+                    Delete Selected
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Quotation Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 border-b border-slate-200 font-bold text-slate-600 uppercase tracking-wider text-[10px]">
+                  <tr>
+                    <th className="p-3 w-10 text-center">
+                      <input
+                        type="checkbox"
+                        checked={
+                          filteredQuotations.length > 0 &&
+                          selectedIds.length === filteredQuotations.length
+                        }
+                        onChange={toggleSelectAll}
+                        className="rounded border-slate-300 text-blue-900 focus:ring-blue-500 cursor-pointer"
+                      />
+                    </th>
+                    <th className="p-3">Ref ID</th>
+                    <th className="p-3">Date / Valid Until</th>
+                    <th className="p-3">Client Name</th>
+                    <th className="p-3 text-right">Items</th>
+                    <th className="p-3 text-right">Grand Total</th>
+                    <th className="p-3 text-center">Status</th>
+                    <th className="p-3 text-center">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
+                  {filteredQuotations.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="p-8 text-center text-slate-400 font-semibold">
+                        No quotations found matching your filter.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredQuotations.map((q) => {
+                      const isSelected = selectedIds.includes(q.id);
+                      return (
+                        <tr
+                          key={q.id}
+                          className={`hover:bg-slate-50/80 transition-colors ${
+                            isSelected ? 'bg-blue-50/50' : ''
+                          }`}
+                        >
+                          <td className="p-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleSelectOne(q.id)}
+                              className="rounded border-slate-300 text-blue-900 focus:ring-blue-500 cursor-pointer"
+                            />
+                          </td>
+                          <td className="p-3 font-bold text-blue-900">{q.id}</td>
+                          <td className="p-3 text-slate-600">
+                            <div>{q.quotationDate}</div>
+                            <div className="text-[10px] text-slate-400">Valid: {q.validUntil}</div>
+                          </td>
+                          <td className="p-3">
+                            <div className="font-bold text-slate-900">{q.customerName || 'Client'}</div>
+                            <div className="text-[10px] text-slate-500">{q.customerPhone || 'N/A'}</div>
+                          </td>
+                          <td className="p-3 text-right font-semibold">{q.items?.length || 0} Pcs</td>
+                          <td className="p-3 text-right font-black text-slate-900">
+                            ৳{q.grandTotal.toLocaleString()}
+                          </td>
+                          <td className="p-3 text-center">
+                            <span
+                              className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                                q.status === 'Converted'
+                                  ? 'bg-blue-100 text-blue-900 border border-blue-300'
+                                  : q.status === 'Accepted'
+                                  ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                                  : q.status === 'Sent'
+                                  ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                  : q.status === 'Rejected'
+                                  ? 'bg-red-100 text-red-900 border border-red-300'
+                                  : 'bg-slate-100 text-slate-700'
+                              }`}
+                            >
+                              {q.status}
+                            </span>
+                          </td>
+                          <td className="p-3 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              {/* Print / View */}
+                              <button
+                                onClick={() => handleOpenPrintView(q)}
+                                className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold cursor-pointer"
+                                title="Print / Download PDF"
+                              >
+                                <Printer className="h-3.5 w-3.5" />
+                              </button>
+
+                              {/* WhatsApp */}
+                              <button
+                                onClick={() => handleWhatsApp(q)}
+                                className="p-1.5 rounded-lg bg-[#25D366]/10 hover:bg-[#25D366]/20 text-[#25D366] font-bold cursor-pointer"
+                                title="Send via WhatsApp"
+                              >
+                                <MessageSquare className="h-3.5 w-3.5" />
+                              </button>
+
+                              {/* Convert to Order */}
+                              {q.status !== 'Converted' && (
+                                <button
+                                  onClick={() => handleConvertOrder(q.id)}
+                                  className="p-1.5 rounded-lg bg-blue-100 hover:bg-blue-200 text-blue-900 font-bold cursor-pointer"
+                                  title="Convert to Sales Order"
+                                >
+                                  <RefreshCw className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+
+                              {/* Edit */}
+                              <button
+                                onClick={() => {
+                                  setQuotationToEdit(q);
+                                  setIsModalOpen(true);
+                                }}
+                                className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 cursor-pointer"
+                                title="Edit Quotation"
+                              >
+                                <Edit2 className="h-3.5 w-3.5" />
+                              </button>
+
+                              {/* Delete */}
+                              <button
+                                onClick={() => setDeletingQuotationId(q.id)}
+                                className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 cursor-pointer"
+                                title="Delete"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      ) : (
+        /* PRINTABLE QUOTATION CANVAS VIEW */
+        selectedQuotation && (
+          <div className="space-y-4">
+            {/* Print Controls Bar */}
+            <div className="bg-slate-900 text-white p-3 rounded-2xl flex flex-wrap items-center justify-between gap-3 shadow-lg print:hidden">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setPaperSize('a4')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer ${
+                    paperSize === 'a4' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'
+                  }`}
+                >
+                  A4 Paper
+                </button>
+                <button
+                  onClick={() => setPaperSize('a5')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer ${
+                    paperSize === 'a5' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'
+                  }`}
+                >
+                  A5 Paper
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handlePDFDownload}
+                  disabled={isGeneratingPDF}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer disabled:opacity-50"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  <span>{isGeneratingPDF ? 'Generating...' : 'Download PDF'}</span>
+                </button>
+
+                <button
+                  onClick={() => handleWhatsApp(selectedQuotation)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#25D366] hover:bg-[#20bd5a] text-white text-xs font-bold cursor-pointer"
+                >
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  <span>WhatsApp</span>
+                </button>
+
+                {selectedQuotation.status !== 'Converted' && (
+                  <button
+                    onClick={() => handleConvertOrder(selectedQuotation.id)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold cursor-pointer"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    <span>Convert to Order</span>
+                  </button>
+                )}
+
+                <button
+                  onClick={() => window.print()}
+                  className="flex items-center gap-2 px-4 py-1.5 rounded-xl bg-white text-slate-900 text-xs font-bold cursor-pointer hover:bg-slate-100"
+                >
+                  <Printer className="h-4 w-4 text-blue-600" />
+                  <span>Print</span>
+                </button>
+              </div>
+            </div>
+
+            {/* A4/A5 Printable Paper */}
+            <div className="flex justify-center bg-slate-200/70 p-4 sm:p-8 rounded-2xl border border-slate-300 print:bg-transparent print:p-0 print:border-none">
+              <div
+                id="printable-quotation-canvas"
+                className={`printable-invoice-container paper-${paperSize} bg-white shadow-2xl text-slate-900 transition-all relative overflow-hidden border-4 border-double border-blue-950 ${
+                  paperSize === 'a5'
+                    ? 'w-full max-w-[148mm] p-5 space-y-4 text-xs'
+                    : 'w-full max-w-[210mm] p-8 space-y-5 text-xs'
+                }`}
+              >
+                {/* Watermark Seal Overlay */}
+                <div className="absolute inset-0 pointer-events-none flex items-center justify-center overflow-hidden z-10 opacity-15">
+                  <div
+                    className={`border-8 border-double px-12 py-4 rounded-3xl transform -rotate-25 font-black tracking-widest text-6xl uppercase ${
+                      selectedQuotation.status === 'Converted'
+                        ? 'border-blue-900 text-blue-900'
+                        : selectedQuotation.status === 'Accepted'
+                        ? 'border-emerald-700 text-emerald-700'
+                        : 'border-amber-700 text-amber-700'
+                    }`}
+                  >
+                    {selectedQuotation.status === 'Converted'
+                      ? 'CONVERTED ORDER'
+                      : selectedQuotation.status === 'Accepted'
+                      ? 'OFFICIAL ACCEPTED'
+                      : 'PRICE QUOTATION'}
+                  </div>
+                </div>
+
+                {/* Header */}
+                <div className="flex justify-between items-start border-b-2 border-blue-950 pb-4">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={companySettings.logoUrl || '/logo.jpg'}
+                        alt="Company Logo"
+                        className="h-14 w-auto object-contain max-w-[200px]"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = '/logo.jpg';
+                        }}
+                      />
+                      <div>
+                        <h1 className="text-2xl font-black text-blue-950 tracking-tight leading-none">
+                          {companySettings.companyName}
+                        </h1>
+                        <p className="text-xs font-bold text-blue-800 mt-1 uppercase tracking-wider">{companySettings.businessType}</p>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-slate-600 max-w-sm mt-1.5 leading-snug">{companySettings.address}</p>
+                    <div className="text-[11px] text-slate-700 font-medium pt-0.5">
+                      <span>Phone: <strong className="text-slate-900">{companySettings.phone}</strong></span> • <span>BIN/TAX: <strong className="text-slate-900">{companySettings.taxId}</strong></span>
+                    </div>
+                  </div>
+
+                  <div className="text-right space-y-1.5">
+                    <div className="inline-block bg-blue-950 text-amber-300 font-black px-4 py-1.5 rounded-lg text-xs uppercase tracking-widest shadow-xs">
+                      COMMERCIAL QUOTATION
+                    </div>
+                    <p className="text-xs font-black text-slate-900 pt-1">Ref No: <span className="font-mono text-blue-900">{selectedQuotation.id}</span></p>
+                    <p className="text-[11px] text-slate-600">Issue Date: <strong>{selectedQuotation.quotationDate}</strong></p>
+                    <div className="text-[11px] font-bold text-amber-900 bg-amber-50 border border-amber-300 px-2.5 py-1 rounded-lg inline-block">
+                      Valid Until: {selectedQuotation.validUntil}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Client Billed To & Quotation Note */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs">
+                    <span className="font-bold text-blue-900 uppercase tracking-wider block text-[10px] border-b border-slate-200 pb-1 mb-1">
+                      CLIENT / PROSPECT DETAILS (গ্রাহক বিবরণী)
+                    </span>
+                    <h3 className="text-sm font-black text-slate-900">
+                      {selectedQuotation.customerName || 'Valued Prospect'}
+                    </h3>
+                    <p className="text-[11px] text-slate-700 font-medium">Phone: <strong>{selectedQuotation.customerPhone || 'N/A'}</strong></p>
+                    <p className="text-[11px] text-slate-600">Address: {selectedQuotation.customerAddress || 'Dhaka, Bangladesh'}</p>
+                  </div>
+
+                  <div className="bg-blue-50/50 p-3.5 rounded-xl border border-blue-200 text-xs flex flex-col justify-between">
+                    <div>
+                      <span className="font-bold text-blue-900 uppercase tracking-wider block text-[10px] border-b border-blue-200 pb-1 mb-1">
+                        QUOTATION SUMMARY & SCOPE
+                      </span>
+                      <p className="text-[11px] text-slate-700 leading-relaxed italic">
+                        "{selectedQuotation.notes || 'Official price estimation and proposal valid for the specified period.'}"
+                      </p>
+                    </div>
+                    <div className="text-[10px] text-blue-900 font-semibold mt-2">
+                      Prepared By: <strong className="font-bold text-slate-900">{selectedQuotation.createdBy || 'Authorized Manager'}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Items Table */}
+                <div className="border border-slate-300 rounded-xl overflow-hidden shadow-xs">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-blue-950 text-white font-bold text-[10px] uppercase tracking-wider">
+                      <tr>
+                        <th className="p-3 text-center w-12 border-r border-blue-900">SL</th>
+                        <th className="p-3 border-r border-blue-900">Product / Item Description</th>
+                        <th className="p-3 text-center w-20 border-r border-blue-900">Quantity</th>
+                        <th className="p-3 text-right w-28 border-r border-blue-900">Unit Rate (৳)</th>
+                        <th className="p-3 text-right w-32">Total Amount (৳)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 font-medium text-slate-800">
+                      {selectedQuotation.items.map((item, idx) => (
+                        <tr key={item.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/80'}>
+                          <td className="p-3 text-center font-mono font-bold text-slate-400 border-r border-slate-200">{idx + 1}</td>
+                          <td className="p-3 font-bold text-slate-900 border-r border-slate-200">{item.productName || item.productId}</td>
+                          <td className="p-3 text-center font-bold text-slate-800 border-r border-slate-200">{item.quantity}</td>
+                          <td className="p-3 text-right font-semibold border-r border-slate-200">৳{item.unitPrice.toLocaleString()}</td>
+                          <td className="p-3 text-right font-black text-blue-950">৳{item.totalPrice.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Total & Summary Box */}
+                <div className="flex flex-col sm:flex-row justify-between items-start gap-4 pt-1">
+                  <div className="flex-1 space-y-2">
+                    <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                      <span className="font-bold text-blue-950 text-[10px] uppercase tracking-wider block mb-1">
+                        TERMS & CONDITIONS (কোটেশনের শর্তাবলী)
+                      </span>
+                      <p className="text-[10px] text-slate-600 whitespace-pre-line leading-relaxed">
+                        {selectedQuotation.termsConditions || companySettings.termsAndConditions}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="w-full sm:w-72 space-y-1.5 font-medium bg-slate-50 p-3.5 rounded-xl border border-slate-300 text-xs">
+                    <div className="flex justify-between text-slate-600 py-0.5">
+                      <span>Subtotal Items:</span>
+                      <span className="font-bold text-slate-900">৳{selectedQuotation.subtotal.toLocaleString()}</span>
+                    </div>
+                    {selectedQuotation.discountAmount > 0 && (
+                      <div className="flex justify-between text-slate-600 py-0.5">
+                        <span>Special Discount:</span>
+                        <span className="font-bold text-red-600">-৳{selectedQuotation.discountAmount.toLocaleString()}</span>
+                      </div>
+                    )}
+                    {selectedQuotation.deliveryCharge > 0 && (
+                      <div className="flex justify-between text-slate-600 py-0.5">
+                        <span>Estimated Freight/Delivery:</span>
+                        <span className="font-bold text-slate-900">+৳{selectedQuotation.deliveryCharge.toLocaleString()}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between py-2 border-t-2 border-b-2 border-blue-950 font-black text-blue-950 text-base">
+                      <span>Quotation Grand Total:</span>
+                      <span>৳{selectedQuotation.grandTotal.toLocaleString()}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Signatures & Footer */}
+                <div className="pt-10 grid grid-cols-2 gap-8 text-center text-[11px]">
+                  <div>
+                    <div className="border-t-2 border-slate-400 w-40 mx-auto pt-1 font-bold text-slate-700">
+                      Client Acceptance Signature
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Signed & Approved By Customer</p>
+                  </div>
+                  <div>
+                    <div className="border-t-2 border-blue-950 w-40 mx-auto pt-1 font-black text-blue-950">
+                      Authorized Officer Signature
+                    </div>
+                    <p className="text-[10px] text-slate-600 font-semibold mt-0.5">
+                      {companySettings.companyName}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      )}
+
+      {/* New/Edit Modal */}
+      <NewQuotationModal
+        isOpen={isModalOpen}
+        onClose={() => {
+          setIsModalOpen(false);
+          setQuotationToEdit(null);
+        }}
+        quotationToEdit={quotationToEdit}
+      />
+
+      {/* Delete Confirmation Modal */}
+      {deletingQuotationId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 border border-slate-200">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="p-2.5 rounded-full bg-red-100 text-red-600">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <h3 className="text-base font-bold text-slate-900">Delete Quotation?</h3>
+            </div>
+            <p className="text-xs text-slate-600 mb-5 leading-relaxed">
+              Are you sure you want to delete quotation <strong className="text-slate-900">{deletingQuotationId}</strong>? This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeletingQuotationId(null)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  deleteQuotation(deletingQuotationId);
+                  setDeletingQuotationId(null);
+                }}
+                className="rounded-lg bg-red-600 px-4 py-2 text-xs font-semibold text-white hover:bg-red-700 cursor-pointer shadow-xs"
+              >
+                Confirm Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Delete Confirmation Modal */}
+      {isBatchDeleting && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 border border-slate-200">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="p-2.5 rounded-full bg-red-100 text-red-600">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <h3 className="text-base font-bold text-slate-900">Batch Delete Quotations?</h3>
+            </div>
+            <p className="text-xs text-slate-600 mb-5 leading-relaxed">
+              Are you sure you want to delete <strong className="text-slate-900">{selectedIds.length}</strong> selected quotation(s)?
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsBatchDeleting(false)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmBatchDeleteAction}
+                className="rounded-lg bg-red-600 px-4 py-2 text-xs font-semibold text-white hover:bg-red-700 cursor-pointer shadow-xs"
+              >
+                Confirm Batch Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Convert Order Confirmation Modal */}
+      {convertingQuotationId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 border border-slate-200">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="p-2.5 rounded-full bg-blue-100 text-blue-600">
+                <RefreshCw className="h-5 w-5" />
+              </div>
+              <h3 className="text-base font-bold text-slate-900">Convert to Sales Order?</h3>
+            </div>
+            <p className="text-xs text-slate-600 mb-5 leading-relaxed">
+              Convert quotation <strong className="text-slate-900">{convertingQuotationId}</strong> into an active Sales Order?
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConvertingQuotationId(null)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmConvertOrderAction}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 cursor-pointer shadow-xs"
+              >
+                Convert Now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

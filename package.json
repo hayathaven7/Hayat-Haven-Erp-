@@ -1,0 +1,499 @@
+import React, { useState } from 'react';
+import {
+  Printer,
+  Sliders,
+  CheckCircle2,
+  Bluetooth,
+  Laptop,
+  Check,
+  Zap,
+  Save,
+  RotateCcw,
+  Sparkles,
+  Info,
+  Smartphone,
+  Maximize2,
+  FileText
+} from 'lucide-react';
+import { useERP } from '../../context/ERPContext';
+import {
+  connectBluetoothPrinter,
+  disconnectBluetoothPrinter,
+  getConnectedDeviceName,
+  printSalesOrderBluetooth,
+} from '../../utils/bluetoothPrinter';
+
+export const PrinterSettingsModule: React.FC = () => {
+  const { companySettings, updateCompanySettings, salesOrders } = useERP();
+
+  const [paperSize, setPaperSize] = useState<'pos3in' | 'pos2in' | 'a4' | 'a5'>(
+    companySettings.defaultPaperSize || 'pos3in'
+  );
+  const [printerMode, setPrinterMode] = useState<'standard' | 'bluetooth' | 'rawbt'>(
+    companySettings.defaultPrinterMode || 'standard'
+  );
+  const [printerName, setPrinterName] = useState<string>(
+    companySettings.defaultPrinterName || 'Windows System Default Driver (POS-80 / LaserJet)'
+  );
+  const [autoPrintOnSave, setAutoPrintOnSave] = useState<boolean>(
+    companySettings.enableAutoPrintOnSave ?? true
+  );
+
+  // Bluetooth State
+  const [btConnected, setBtConnected] = useState<boolean>(getConnectedDeviceName() !== null);
+  const [btDeviceName, setBtDeviceName] = useState<string>(getConnectedDeviceName() || 'No Device');
+  const [btConnecting, setBtConnecting] = useState<boolean>(false);
+  const [btMsg, setBtMsg] = useState<string>('');
+
+  const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
+
+  const handleConnectBt = async () => {
+    setBtConnecting(true);
+    setBtMsg('ব্লুটুথ থার্মাল প্রিন্টার খুঁজছে...');
+    const result = await connectBluetoothPrinter();
+    setBtConnecting(false);
+    if (result.success) {
+      setBtConnected(true);
+      setBtDeviceName(result.deviceName || 'Thermal Printer');
+      setBtMsg(`সফলভাবে কানেক্ট হয়েছে: ${result.deviceName}`);
+      setPrinterMode('bluetooth');
+    } else {
+      setBtMsg(`কানেক্ট ব্যর্থ: ${result.message}`);
+    }
+  };
+
+  const handleDisconnectBt = async () => {
+    await disconnectBluetoothPrinter();
+    setBtConnected(false);
+    setBtDeviceName('No Device');
+    setBtMsg('ব্লুটুথ ডিসকানেক্ট করা হয়েছে।');
+  };
+
+  const handleSaveSettings = () => {
+    updateCompanySettings({
+      defaultPaperSize: paperSize,
+      defaultPrinterMode: printerMode,
+      defaultPrinterName: printerName,
+      enableAutoPrintOnSave: autoPrintOnSave,
+    });
+    setSaveSuccess(true);
+    setTimeout(() => setSaveSuccess(false), 3000);
+  };
+
+  const handleTestPrint = async () => {
+    if (printerMode === 'bluetooth' && btConnected) {
+      const sampleOrder = salesOrders[0] || {
+        id: 'TEST-1001',
+        orderDate: new Date().toISOString().split('T')[0],
+        customerId: 'CUST-TEST',
+        customerName: 'Test Customer',
+        customerPhone: '01700000000',
+        customerAddress: 'Dhaka, Bangladesh',
+        orderType: 'Retail' as const,
+        subtotal: 1000,
+        discountAmount: 100,
+        deliveryCharge: 60,
+        grandTotal: 960,
+        advancePaid: 960,
+        dueAmount: 0,
+        paymentStatus: 'Paid' as const,
+        paymentMethod: 'Cash',
+        deliveryStatus: 'Delivered' as const,
+        notes: 'Printer Test Receipt',
+        createdBy: 'Admin',
+        items: [
+          {
+            id: 'item-1',
+            orderId: 'TEST-1001',
+            productId: 'PRD-101',
+            productName: 'Test Sample Item',
+            quantity: 2,
+            unitPrice: 500,
+            totalPrice: 1000,
+            profitAmount: 200,
+          },
+        ],
+      };
+
+      const res = await printSalesOrderBluetooth(sampleOrder, companySettings, paperSize === 'pos2in' ? 'pos2in' : 'pos3in');
+      alert(res.message);
+    } else {
+      // Trigger standard driver print dialog with sample print text
+      window.print();
+    }
+  };
+
+  return (
+    <div className="space-y-6 pb-12 max-w-6xl mx-auto">
+      {/* Top Banner Header */}
+      <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 rounded-3xl p-6 text-white shadow-xl border border-slate-800 relative overflow-hidden">
+        <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
+          <Printer className="w-64 h-64 text-blue-400" />
+        </div>
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="bg-blue-600/30 text-blue-400 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full border border-blue-500/30 font-mono tracking-wider">
+                PRINTER & DRIVER SETUP
+              </span>
+              <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-bold bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-800/50">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                Driver Ready
+              </span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight flex items-center gap-3">
+              <Sliders className="h-7 w-7 text-blue-400" />
+              <span>প্রিন্টার সেটিংস ও অটো-ড্রাইভার ডিউটি (Printer Settings)</span>
+            </h1>
+            <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
+              আপনার পিসিতে ইন্সটলকৃত ড্রাইভার (POS-80, Xprinter, Epson, Canon, HP) অথবা ব্লুটুথ থার্মাল প্রিন্টার নির্বাচন করুন। অর্ডার সেভ বা "Save & Print" বাটনে চাপার সাথে সাথে সেট করা ড্রাইভারের মাধ্যমে অটো মেমো প্রিন্ট হয়ে যাবে।
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0">
+            <button
+              onClick={handleSaveSettings}
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs px-5 py-3 rounded-2xl shadow-lg active:scale-95 transition-all cursor-pointer ring-2 ring-blue-400/50"
+            >
+              <Save className="h-4 w-4" />
+              <span>সেটিংস সেভ করুন (Save)</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {saveSuccess && (
+        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4 flex items-center gap-3 text-emerald-700 font-bold text-xs animate-fade-in">
+          <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0" />
+          <span>প্রিন্টার ও ড্রাইভার সেটিংস সফলভাবে আপডেট হয়েছে! (Printer settings updated successfully)</span>
+        </div>
+      )}
+
+      {/* Main Settings Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        
+        {/* Card 1: Primary Duty Printer Selection */}
+        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs space-y-5">
+          <div className="flex items-center gap-2.5 pb-3 border-b border-slate-100">
+            <div className="p-2.5 bg-blue-50 text-blue-600 rounded-xl">
+              <Laptop className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-sm font-black text-slate-900">১. মূল প্রিন্টার ড্রাইভার নির্বাচন (Primary Duty Printer)</h2>
+              <p className="text-[11px] text-slate-500">আপনার শপে প্রধানত কোন ড্রাইভার দিয়ে মেমো প্রিন্ট করবেন</p>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {/* Option A: System Installed PC Driver */}
+            <label
+              onClick={() => setPrinterMode('standard')}
+              className={`flex items-start gap-3 p-4 rounded-2xl border-2 transition-all cursor-pointer ${
+                printerMode === 'standard'
+                  ? 'border-blue-600 bg-blue-50/40 shadow-xs'
+                  : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
+              }`}
+            >
+              <input
+                type="radio"
+                name="printerMode"
+                checked={printerMode === 'standard'}
+                onChange={() => setPrinterMode('standard')}
+                className="mt-1 text-blue-600 focus:ring-blue-500 h-4 w-4"
+              />
+              <div className="space-y-1 flex-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-extrabold text-xs text-slate-900 flex items-center gap-2">
+                    🖥️ পিসি ডিফোল্ট ড্রাইভার (OS System Default Printer)
+                  </span>
+                  {printerMode === 'standard' && (
+                    <span className="text-[10px] bg-blue-600 text-white font-black px-2 py-0.5 rounded-full">ACTIVE</span>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-600 leading-normal">
+                  Windows / Mac / Chrome এ ড্রাইভার সেট করা যেকোন প্রিন্টার (Xprinter, POS-80, Epson, HP, Canon)। এটি সবচেয়ে নির্ভরযোগ্য ও দ্রুত কাজ করে।
+                </p>
+              </div>
+            </label>
+
+            {/* Option B: Bluetooth Thermal Printer */}
+            <label
+              onClick={() => setPrinterMode('bluetooth')}
+              className={`flex items-start gap-3 p-4 rounded-2xl border-2 transition-all cursor-pointer ${
+                printerMode === 'bluetooth'
+                  ? 'border-blue-600 bg-blue-50/40 shadow-xs'
+                  : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
+              }`}
+            >
+              <input
+                type="radio"
+                name="printerMode"
+                checked={printerMode === 'bluetooth'}
+                onChange={() => setPrinterMode('bluetooth')}
+                className="mt-1 text-blue-600 focus:ring-blue-500 h-4 w-4"
+              />
+              <div className="space-y-1 flex-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-extrabold text-xs text-slate-900 flex items-center gap-2">
+                    📡 ওয়ারলেস ব্লুটুথ থার্মাল প্রিন্টার (Bluetooth Thermal ESC/POS)
+                  </span>
+                  {printerMode === 'bluetooth' && (
+                    <span className="text-[10px] bg-blue-600 text-white font-black px-2 py-0.5 rounded-full">ACTIVE</span>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-600 leading-normal">
+                  মোবাইল, ট্যাবলেট বা পিসি থেকে সরাসরি ব্লুটুথ দিয়ে থার্মাল পিওএস প্রিন্টারে ডায়রেক্ট টেক্সট কমান্ড পাঠায়।
+                </p>
+              </div>
+            </label>
+
+            {/* Option C: RawBT Android App Connector */}
+            <label
+              onClick={() => setPrinterMode('rawbt')}
+              className={`flex items-start gap-3 p-4 rounded-2xl border-2 transition-all cursor-pointer ${
+                printerMode === 'rawbt'
+                  ? 'border-blue-600 bg-blue-50/40 shadow-xs'
+                  : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
+              }`}
+            >
+              <input
+                type="radio"
+                name="printerMode"
+                checked={printerMode === 'rawbt'}
+                onChange={() => setPrinterMode('rawbt')}
+                className="mt-1 text-blue-600 focus:ring-blue-500 h-4 w-4"
+              />
+              <div className="space-y-1 flex-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-extrabold text-xs text-slate-900 flex items-center gap-2">
+                    📱 RawBT / Android Driver Connector
+                  </span>
+                  {printerMode === 'rawbt' && (
+                    <span className="text-[10px] bg-blue-600 text-white font-black px-2 py-0.5 rounded-full">ACTIVE</span>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-600 leading-normal">
+                  অ্যান্ড্রয়েড ডিভাইসে RawBT অ্যাপ ব্যবহার করে USB বা Bluetooth থার্মাল প্রিন্টারে প্রিন্ট ট্রিপ করে।
+                </p>
+              </div>
+            </label>
+          </div>
+
+          {/* Custom Printer Alias Input */}
+          <div className="pt-2 border-t border-slate-100 space-y-1.5">
+            <label className="text-[11px] font-bold text-slate-700 block">
+              ড্রাইভার / প্রিন্টার কাস্টম নাম (Printer Label):
+            </label>
+            <input
+              type="text"
+              value={printerName}
+              onChange={(e) => setPrinterName(e.target.value)}
+              placeholder="e.g. POS-80 Thermal Printer (Counter 1)"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        </div>
+
+        {/* Card 2: Default Paper Size & Thermal Width */}
+        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs space-y-5">
+          <div className="flex items-center gap-2.5 pb-3 border-b border-slate-100">
+            <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-xl">
+              <FileText className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-sm font-black text-slate-900">২. ডিফোল্ট পেপার সাইজ (Default Paper Format)</h2>
+              <p className="text-[11px] text-slate-500">আপনার কাউন্টারে ব্যবহৃত মেমো পেপারের ধরণ সিলেক্ট করুন</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            {/* POS 3 Inch (80mm) */}
+            <button
+              type="button"
+              onClick={() => setPaperSize('pos3in')}
+              className={`p-4 rounded-2xl border-2 text-left space-y-2 transition-all cursor-pointer ${
+                paperSize === 'pos3in'
+                  ? 'border-emerald-600 bg-emerald-50/50 shadow-xs ring-2 ring-emerald-500/20'
+                  : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-black text-xs text-slate-900">🧾 3-Inch POS (80mm)</span>
+                {paperSize === 'pos3in' && <Check className="h-4 w-4 text-emerald-600 font-bold" />}
+              </div>
+              <p className="text-[10px] text-slate-600">
+                standard 80mm standard thermal POS counter receipt roll (৮০ মিমি রোল).
+              </p>
+            </button>
+
+            {/* POS 2 Inch (58mm) */}
+            <button
+              type="button"
+              onClick={() => setPaperSize('pos2in')}
+              className={`p-4 rounded-2xl border-2 text-left space-y-2 transition-all cursor-pointer ${
+                paperSize === 'pos2in'
+                  ? 'border-emerald-600 bg-emerald-50/50 shadow-xs ring-2 ring-emerald-500/20'
+                  : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-black text-xs text-slate-900">🧾 2-Inch POS (58mm)</span>
+                {paperSize === 'pos2in' && <Check className="h-4 w-4 text-emerald-600 font-bold" />}
+              </div>
+              <p className="text-[10px] text-slate-600">
+                Mini Bluetooth 58mm mobile roll (৫৮ মিমি ছোট থার্মাল পেপার).
+              </p>
+            </button>
+
+            {/* A4 Full Page */}
+            <button
+              type="button"
+              onClick={() => setPaperSize('a4')}
+              className={`p-4 rounded-2xl border-2 text-left space-y-2 transition-all cursor-pointer ${
+                paperSize === 'a4'
+                  ? 'border-emerald-600 bg-emerald-50/50 shadow-xs ring-2 ring-emerald-500/20'
+                  : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-black text-xs text-slate-900">📄 A4 Full Page</span>
+                {paperSize === 'a4' && <Check className="h-4 w-4 text-emerald-600 font-bold" />}
+              </div>
+              <p className="text-[10px] text-slate-600">
+                ফুল পেজ লেজার / ইঙ্কজেট প্যাড মেমো (A4 Standard Invoice).
+              </p>
+            </button>
+
+            {/* A5 Half Page */}
+            <button
+              type="button"
+              onClick={() => setPaperSize('a5')}
+              className={`p-4 rounded-2xl border-2 text-left space-y-2 transition-all cursor-pointer ${
+                paperSize === 'a5'
+                  ? 'border-emerald-600 bg-emerald-50/50 shadow-xs ring-2 ring-emerald-500/20'
+                  : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-black text-xs text-slate-900">📜 A5 Half Page</span>
+                {paperSize === 'a5' && <Check className="h-4 w-4 text-emerald-600 font-bold" />}
+              </div>
+              <p className="text-[10px] text-slate-600">
+                হাফ পেজ ক্যাশ মেমো (A5 Half Page Print).
+              </p>
+            </button>
+          </div>
+
+          {/* Auto Print Rules Toggle */}
+          <div className="pt-3 border-t border-slate-100 space-y-3">
+            <h3 className="text-xs font-black text-slate-900">অটো-প্রিন্ট অ্যাকশন সেটিংস (Auto-Print Rules)</h3>
+            <label className="flex items-center gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-200 cursor-pointer hover:bg-slate-100 transition-colors">
+              <input
+                type="checkbox"
+                checked={autoPrintOnSave}
+                onChange={(e) => setAutoPrintOnSave(e.target.checked)}
+                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-4 w-4 cursor-pointer"
+              />
+              <div className="space-y-0.5">
+                <span className="text-xs font-bold text-slate-900 block">
+                  ⚡ সেভ ও মেমো প্রিন্ট বাটনে অটো ডায়ালগ ট্রিপ চালু রাখুন
+                </span>
+                <p className="text-[10px] text-slate-500">
+                  নতুন অর্ডার বা সেলস সেভ করলে সরাসরি প্রিন্টার ক্যানভাস খুলে ড্রাইভার কমান্ড দেবে।
+                </p>
+              </div>
+            </label>
+          </div>
+        </div>
+
+      </div>
+
+      {/* Bluetooth Device Management Section */}
+      <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2.5 bg-blue-50 text-blue-600 rounded-xl">
+              <Bluetooth className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-sm font-black text-slate-900">ব্লুটুথ ডিভাইস কানেকশন কন্ট্রোল (Bluetooth POS Manager)</h2>
+              <p className="text-[11px] text-slate-500">ডিভাইস পেয়ার করুন এবং বর্তমান কানেকশন টেস্ট করুন</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span
+              className={`px-3 py-1 rounded-full text-xs font-black flex items-center gap-1.5 ${
+                btConnected ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full ${btConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`}></span>
+              <span>{btConnected ? `Connected: ${btDeviceName}` : 'Disconnected'}</span>
+            </span>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+          <div className="space-y-1">
+            <span className="text-xs font-bold text-slate-900 block">
+              কানেক্টেড ডিভাইস: {btConnected ? btDeviceName : 'কোন ডিভাইস যুক্ত নেই'}
+            </span>
+            <p className="text-[11px] text-slate-500">
+              {btMsg || 'আপনার থার্মাল প্রিন্টারের পাওয়ার চালু রাখুন এবং ব্লুটুথ অন করুন।'}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {btConnected ? (
+              <button
+                type="button"
+                onClick={handleDisconnectBt}
+                className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs px-4 py-2 rounded-xl transition-all cursor-pointer"
+              >
+                ডিসকানেক্ট করুন (Disconnect)
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleConnectBt}
+                disabled={btConnecting}
+                className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs px-4 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-2 shadow-sm"
+              >
+                <Bluetooth className="h-4 w-4" />
+                <span>{btConnecting ? 'কানেক্ট হচ্ছে...' : 'ব্লুটুথ প্রিন্টার কানেক্ট করুন'}</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={handleTestPrint}
+              className="bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs px-4 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-2 shadow-sm"
+            >
+              <Printer className="h-4 w-4 text-emerald-400" />
+              <span>🖨️ টেস্ট মেমো প্রিন্ট করুন (Test Print)</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Guide & Instructions Box */}
+      <div className="bg-gradient-to-br from-blue-50 to-slate-50 rounded-3xl p-6 border border-blue-200/80 space-y-3">
+        <div className="flex items-center gap-2 text-blue-950 font-black text-xs uppercase tracking-wider">
+          <Info className="h-4 w-4 text-blue-600" />
+          <span>পিসিতে অটো-ড্রাইভার ডিউটি প্রিন্ট সেট করার টিপস (Auto Driver Tips):</span>
+        </div>
+        <ul className="text-xs text-slate-700 space-y-1.5 list-disc list-inside leading-relaxed font-medium">
+          <li>
+            <strong>Windows Default Printer:</strong> Windows Control Panel &gt; Printers &amp; Scanners থেকে আপনার কাঙ্ক্ষিত প্রিন্টারকে (যেমন: POS-80) <em>"Set as default printer"</em> বানিয়ে রাখুন।
+          </li>
+          <li>
+            <strong>Chrome Silent Auto-Print:</strong> ক্রোম ব্রাউজারের শর্টকাটের পিছনে <code>--kiosk-printing</code> ফ্ল্যাগ যুক্ত করলে কোনো পপআপ ছাড়াই ১ সেকেন্ডে স্বয়ংক্রিয়ভাবে ড্রাইভার দিয়ে প্রিন্ট বের হয়ে আসবে।
+          </li>
+          <li>
+            <strong>Save &amp; Print Memo:</strong> "Save &amp; Print" বাটন চাপলে সিস্টেম স্বয়ংক্রিয়ভাবে সেভ করা মেমোটি ডিউটিফুল প্রিন্টার ড্রাইভারে ট্রিপ করে দেবে।
+          </li>
+        </ul>
+      </div>
+    </div>
+  );
+};

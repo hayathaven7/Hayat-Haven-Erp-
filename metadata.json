@@ -1,0 +1,194 @@
+import JSZip from 'jszip';
+import { SalesOrder, CompanySettings, Customer } from '../types/erp';
+
+function generateSingleInvoiceHTML(
+  order: SalesOrder,
+  company: CompanySettings,
+  customer?: Customer
+): string {
+  const isPaid = order.paymentStatus === 'Paid' || order.dueAmount <= 0;
+  const isOnline =
+    order.orderType === 'Online' ||
+    order.orderType === 'AI Bot' ||
+    (order.notes && order.notes.toLowerCase().includes('online'));
+
+  const sealText = isPaid ? 'PAID' : order.dueAmount > 0 ? 'DUE' : 'PAID';
+  const sealColor = isPaid ? '#059669' : '#d97706';
+
+  const itemsRows = order.items
+    .map(
+      (item, idx) => `
+    <tr>
+      <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: center; color: #64748b;">${
+        idx + 1
+      }</td>
+      <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: bold; color: #0f172a;">${
+        item.productName || item.productId
+      }</td>
+      <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: center;">${
+        item.quantity
+      }</td>
+      <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: right;">৳${item.unitPrice.toLocaleString()}</td>
+      <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: bold;">৳${item.totalPrice.toLocaleString()}</td>
+    </tr>
+  `
+    )
+    .join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Invoice - ${order.id}</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background: #f8fafc; color: #1e293b; }
+    .invoice-card { max-w: 800px; margin: 0 auto; background: #fff; padding: 32px; border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05); relative; overflow: hidden; }
+    .watermark { position: absolute; top: 35%; left: 25%; transform: rotate(-25deg); border: 6px double ${sealColor}; color: ${sealColor}; opacity: 0.18; padding: 12px 40px; border-radius: 12px; font-size: 52px; font-weight: 900; letter-spacing: 4px; pointer-events: none; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #1e3a8a; padding-bottom: 16px; margin-bottom: 20px; }
+    .company-title { font-size: 22px; font-weight: 900; color: #0f172a; margin: 0; }
+    .company-sub { font-size: 12px; color: #1e40af; font-weight: bold; margin-top: 2px; }
+    .invoice-title { background: #1e3a8a; color: #fff; padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: 800; display: inline-block; text-transform: uppercase; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+    .box { background: #f8fafc; padding: 12px 16px; border-radius: 12px; border: 1px solid #e2e8f0; font-size: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 20px; }
+    th { background: #0f172a; color: #fff; padding: 8px; text-transform: uppercase; font-size: 10px; }
+    .totals { width: 280px; margin-left: auto; font-size: 12px; background: #f8fafc; p: 12px; border-radius: 12px; border: 1px solid #e2e8f0; }
+    .total-row { display: flex; justify-content: space-between; padding: 4px 0; }
+    .grand-total { border-top: 2px solid #0f172a; border-bottom: 2px solid #0f172a; font-weight: 900; font-size: 14px; color: #1e3a8a; padding: 8px 0; margin-top: 4px; }
+    @media print { body { background: #fff; padding: 0; } .invoice-card { border: none; box-shadow: none; } }
+  </style>
+</head>
+<body>
+  <div class="invoice-card">
+    <div class="watermark">${sealText}</div>
+    <div class="header">
+      <div>
+        <h1 class="company-title">${company.companyName}</h1>
+        <div class="company-sub">${company.businessType}</div>
+        <div style="font-size:11px; color:#475569; margin-top:4px;">${company.address} • Tel: ${company.phone}</div>
+      </div>
+      <div style="text-align:right;">
+        <span class="invoice-title">${isOnline ? 'ONLINE MEMO' : 'COMMERCIAL MEMO'}</span>
+        <div style="font-size:14px; font-weight:800; color:#0f172a; margin-top:6px;">Memo #: ${order.id}</div>
+        <div style="font-size:11px; color:#64748b;">Date: ${order.orderDate}</div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="box">
+        <strong style="color:#64748b; font-size:10px; text-transform:uppercase;">Customer Details:</strong>
+        <div style="font-weight:bold; font-size:13px; margin-top:2px;">${order.customerName || 'Client'}</div>
+        <div>Phone: ${customer?.phone || 'N/A'}</div>
+        <div>Address: ${order.deliveryAddress || order.customerAddress || 'Dhaka'}</div>
+      </div>
+      <div class="box">
+        <strong style="color:#64748b; font-size:10px; text-transform:uppercase;">Order Status & Channel:</strong>
+        <div style="margin-top:2px;">Channel: <strong>${isOnline ? '🌐 Online Order' : '🏪 Showroom / Retail'}</strong></div>
+        <div>Payment Method: <strong>${order.paymentMethod || 'Cash'}</strong></div>
+        <div>Payment Status: <strong style="color:${isPaid ? '#059669' : '#d97706'}">${order.paymentStatus}</strong></div>
+        <div>Delivery: <strong>${order.deliveryStatus}</strong></div>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>SL</th>
+          <th style="text-align:left;">Item Name</th>
+          <th>Qty</th>
+          <th style="text-align:right;">Unit Price</th>
+          <th style="text-align:right;">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${itemsRows}
+      </tbody>
+    </table>
+
+    <div class="totals">
+      <div class="total-row"><span>Subtotal:</span><strong>৳${order.subtotal.toLocaleString()}</strong></div>
+      ${order.discountAmount > 0 ? `<div class="total-row" style="color:#dc2626;"><span>Discount:</span><strong>-৳${order.discountAmount.toLocaleString()}</strong></div>` : ''}
+      ${order.deliveryCharge > 0 ? `<div class="total-row"><span>Delivery Charge:</span><strong>+৳${order.deliveryCharge.toLocaleString()}</strong></div>` : ''}
+      <div class="total-row grand-total"><span>Grand Total:</span><span>৳${order.grandTotal.toLocaleString()}</span></div>
+      <div class="total-row" style="color:#059669;"><span>Paid:</span><strong>৳${order.advancePaid.toLocaleString()}</strong></div>
+      <div class="total-row" style="color:#d97706;"><span>Due Balance:</span><strong>৳${order.dueAmount.toLocaleString()}</strong></div>
+    </div>
+
+    <div style="margin-top:40px; display:flex; justify-content:space-between; text-align:center; font-size:11px; color:#64748b;">
+      <div style="border-top:1px solid #cbd5e1; width:150px; pt:4px;">Customer Signature</div>
+      <div style="border-top:1px solid #cbd5e1; width:150px; pt:4px;">Authorized Officer</div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+export async function downloadDailyInvoicesZip(
+  orders: SalesOrder[],
+  company: CompanySettings,
+  customers: Customer[],
+  targetDate?: string
+) {
+  const zip = new JSZip();
+
+  // Filter orders by target date if specified, otherwise use all current orders
+  const activeOrders = targetDate
+    ? orders.filter((o) => o.orderDate === targetDate)
+    : orders;
+
+  if (activeOrders.length === 0) {
+    alert('No sales orders found for the selected date range.');
+    return;
+  }
+
+  // Folders inside ZIP
+  const paidFolder = zip.folder('01_Paid_Memos');
+  const onlineFolder = zip.folder('02_Online_Memos');
+  const dueFolder = zip.folder('03_Due_Invoices');
+
+  // CSV Summary Header
+  let csvContent = 'Order ID,Order Date,Customer Name,Order Channel,Payment Method,Payment Status,Delivery Status,Grand Total (BDT),Paid Amount,Due Amount,Sales Officer\n';
+
+  activeOrders.forEach((order) => {
+    const cust = customers.find((c) => c.id === order.customerId);
+    const htmlContent = generateSingleInvoiceHTML(order, company, cust);
+
+    const safeName = (order.customerName || 'Client').replace(/[^a-zA-Z0-9]/g, '_');
+    const fileName = `Invoice_${order.id}_${safeName}.html`;
+
+    const isPaid = order.paymentStatus === 'Paid' || order.dueAmount <= 0;
+    const isOnline =
+      order.orderType === 'Online' ||
+      order.orderType === 'AI Bot' ||
+      (order.notes && order.notes.toLowerCase().includes('online'));
+
+    // Place into paid folder
+    if (isPaid && paidFolder) {
+      paidFolder.file(fileName, htmlContent);
+    } else if (dueFolder) {
+      dueFolder.file(fileName, htmlContent);
+    }
+
+    // Place into online folder if online order
+    if (isOnline && onlineFolder) {
+      onlineFolder.file(fileName, htmlContent);
+    }
+
+    // Append to CSV Summary
+    csvContent += `"${order.id}","${order.orderDate}","${(order.customerName || '').replace(/"/g, '""')}","${isOnline ? 'Online' : 'Showroom'}","${order.paymentMethod || 'Cash'}","${order.paymentStatus}","${order.deliveryStatus}",${order.grandTotal},${order.advancePaid},${order.dueAmount},"${order.createdBy || ''}"\n`;
+  });
+
+  zip.file('Daily_Sales_Summary_Sheet.csv', csvContent);
+
+  // Generate and trigger download
+  const blob = await zip.generateAsync({ type: 'blob' });
+  const dateStr = targetDate || new Date().toISOString().split('T')[0];
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Hayat_Haven_Daily_Sales_Invoices_${dateStr}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}

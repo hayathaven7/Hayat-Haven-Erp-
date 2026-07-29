@@ -1,0 +1,353 @@
+import React, { useState } from 'react';
+import { FileText, Plus, Trash2, X } from 'lucide-react';
+import { useERP } from '../context/ERPContext';
+import { Quotation } from '../types/erp';
+
+interface NewQuotationModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  quotationToEdit?: Quotation | null;
+}
+
+export const NewQuotationModal: React.FC<NewQuotationModalProps> = ({
+  isOpen,
+  onClose,
+  quotationToEdit,
+}) => {
+  const { customers, products, addQuotation, updateQuotation, activeUser } = useERP();
+
+  const [customerId, setCustomerId] = useState(
+    quotationToEdit?.customerId || customers[0]?.id || ''
+  );
+  const [validDays, setValidDays] = useState(15);
+  const [notes, setNotes] = useState(
+    quotationToEdit?.notes || 'Quotation for price estimation. Valid for 15 days.'
+  );
+  const [terms, setTerms] = useState(
+    quotationToEdit?.termsConditions ||
+      '1. Prices are valid until the specified expiry date.\n2. Payment terms: 50% advance upon order confirmation, 50% on delivery.\n3. Delivery within 24-48 hours upon order placement.'
+  );
+
+  const [items, setItems] = useState<
+    { productId: string; quantity: number; unitPrice: number }[]
+  >(
+    quotationToEdit
+      ? quotationToEdit.items.map((i) => ({
+          productId: i.productId,
+          quantity: i.quantity,
+          unitPrice: i.unitPrice,
+        }))
+      : [{ productId: products[0]?.id || '', quantity: 1, unitPrice: products[0]?.sellingPrice || 0 }]
+  );
+
+  const [discountAmount, setDiscountAmount] = useState(quotationToEdit?.discountAmount || 0);
+  const [deliveryCharge, setDeliveryCharge] = useState(quotationToEdit?.deliveryCharge || 0);
+
+  if (!isOpen) return null;
+
+  const handleProductChange = (index: number, pId: string) => {
+    const prod = products.find((p) => p.id === pId);
+    const updated = [...items];
+    updated[index].productId = pId;
+    if (prod) {
+      updated[index].unitPrice = prod.sellingPrice;
+    }
+    setItems(updated);
+  };
+
+  const handleQuantityChange = (index: number, qty: number) => {
+    const updated = [...items];
+    updated[index].quantity = Math.max(1, qty);
+    setItems(updated);
+  };
+
+  const handleUnitPriceChange = (index: number, price: number) => {
+    const updated = [...items];
+    updated[index].unitPrice = Math.max(0, price);
+    setItems(updated);
+  };
+
+  const addItemRow = () => {
+    if (products.length === 0) return;
+    const firstP = products[0];
+    setItems((prev) => [...prev, { productId: firstP.id, quantity: 1, unitPrice: firstP.sellingPrice }]);
+  };
+
+  const removeItemRow = (index: number) => {
+    if (items.length <= 1) return;
+    setItems((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  // Calculations
+  const calculatedSubtotal = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+  const calculatedGrandTotal = Math.max(0, calculatedSubtotal - discountAmount + deliveryCharge);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customerId) {
+      alert('Please select a customer');
+      return;
+    }
+
+    const selectedCust = customers.find((c) => c.id === customerId);
+
+    const validUntilDate = new Date();
+    validUntilDate.setDate(validUntilDate.getDate() + validDays);
+    const validUntilStr = validUntilDate.toISOString().split('T')[0];
+
+    const quotationItems = items.map((item, idx) => {
+      const prod = products.find((p) => p.id === item.productId);
+      return {
+        id: `qti-${Date.now()}-${idx}`,
+        quotationId: quotationToEdit?.id || 'QT-NEW',
+        productId: item.productId,
+        productName: prod ? prod.name : 'Product',
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        totalPrice: item.quantity * item.unitPrice,
+      };
+    });
+
+    if (quotationToEdit) {
+      updateQuotation({
+        ...quotationToEdit,
+        customerId,
+        customerName: selectedCust ? selectedCust.name : 'Client',
+        customerPhone: selectedCust ? selectedCust.phone : '',
+        customerAddress: selectedCust ? selectedCust.address : '',
+        validUntil: validUntilStr,
+        subtotal: calculatedSubtotal,
+        discountAmount,
+        deliveryCharge,
+        grandTotal: calculatedGrandTotal,
+        notes,
+        termsConditions: terms,
+        items: quotationItems,
+      });
+    } else {
+      addQuotation({
+        validUntil: validUntilStr,
+        customerId,
+        customerName: selectedCust ? selectedCust.name : 'Client',
+        customerPhone: selectedCust ? selectedCust.phone : '',
+        customerAddress: selectedCust ? selectedCust.address : '',
+        subtotal: calculatedSubtotal,
+        discountAmount,
+        deliveryCharge,
+        grandTotal: calculatedGrandTotal,
+        status: 'Sent',
+        notes,
+        termsConditions: terms,
+        createdBy: activeUser?.name || activeUser?.username || 'Admin',
+        items: quotationItems,
+      });
+    }
+
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-2 sm:p-4 overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col border border-slate-200 overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between bg-blue-900 px-5 py-3.5 text-white shrink-0">
+          <div className="flex items-center gap-2.5">
+            <FileText className="h-5 w-5 text-blue-200" />
+            <h2 className="font-bold text-white text-base">
+              {quotationToEdit ? 'Edit Quotation / Price Estimate' : 'Create New Quotation (কোটেশন পত্র)'}
+            </h2>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg hover:bg-blue-800 text-blue-200 hover:text-white cursor-pointer transition-colors"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Form Body */}
+        <form id="new-quotation-form" onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 text-xs">
+          {/* Customer & Validity */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Select Customer (গ্রাহক)</label>
+              <select
+                value={customerId}
+                onChange={(e) => setCustomerId(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 p-2.5 font-medium text-slate-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                required
+              >
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.phone || 'No Phone'})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Validity (মেয়াদ - দিন)</label>
+              <select
+                value={validDays}
+                onChange={(e) => setValidDays(Number(e.target.value))}
+                className="w-full rounded-xl border border-slate-300 p-2.5 font-medium text-slate-900 focus:ring-2 focus:ring-blue-500 outline-none"
+              >
+                <option value={7}>7 Days (১ সপ্তাহ)</option>
+                <option value={15}>15 Days (১৫ দিন)</option>
+                <option value={30}>30 Days (১ মাস)</option>
+                <option value={60}>60 Days (২ মাস)</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Items Table */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-slate-900">Quotation Items (পণ্য তালিকা)</span>
+              <button
+                type="button"
+                onClick={addItemRow}
+                className="flex items-center gap-1 text-xs font-bold text-blue-700 hover:text-blue-900 cursor-pointer"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>Add Item</span>
+              </button>
+            </div>
+
+            <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50">
+              <div className="grid grid-cols-12 gap-2 p-2 font-bold text-slate-600 border-b border-slate-200 text-[11px]">
+                <div className="col-span-5">Product</div>
+                <div className="col-span-2 text-center">Qty</div>
+                <div className="col-span-2 text-right">Unit Price</div>
+                <div className="col-span-2 text-right">Total</div>
+                <div className="col-span-1 text-center">Action</div>
+              </div>
+
+              <div className="p-2 space-y-2 max-h-48 overflow-y-auto custom-scrollbar">
+                {items.map((item, idx) => (
+                  <div key={idx} className="grid grid-cols-12 gap-2 items-center bg-white p-2 rounded-lg border border-slate-200">
+                    <div className="col-span-5">
+                      <select
+                        value={item.productId}
+                        onChange={(e) => handleProductChange(idx, e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 p-1.5 font-medium text-slate-900 outline-none"
+                      >
+                        {products.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name} (৳{p.sellingPrice})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="col-span-2">
+                      <input
+                        type="number"
+                        min="1"
+                        value={item.quantity}
+                        onChange={(e) => handleQuantityChange(idx, Number(e.target.value))}
+                        className="w-full rounded-lg border border-slate-300 p-1.5 text-center font-bold text-slate-900 outline-none"
+                      />
+                    </div>
+
+                    <div className="col-span-2">
+                      <input
+                        type="number"
+                        min="0"
+                        value={item.unitPrice}
+                        onChange={(e) => handleUnitPriceChange(idx, Number(e.target.value))}
+                        className="w-full rounded-lg border border-slate-300 p-1.5 text-right font-bold text-slate-900 outline-none"
+                      />
+                    </div>
+
+                    <div className="col-span-2 text-right font-bold text-slate-900">
+                      ৳{(item.quantity * item.unitPrice).toLocaleString()}
+                    </div>
+
+                    <div className="col-span-1 text-center">
+                      <button
+                        type="button"
+                        onClick={() => removeItemRow(idx)}
+                        disabled={items.length <= 1}
+                        className="p-1 text-slate-400 hover:text-red-600 disabled:opacity-30 cursor-pointer"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Pricing Adjustments */}
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label className="block font-semibold text-slate-600 mb-1">Subtotal</label>
+              <div className="p-2 bg-white border border-slate-300 rounded-lg font-bold text-slate-900">
+                ৳{calculatedSubtotal.toLocaleString()}
+              </div>
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-600 mb-1">Discount (ছাড় - ৳)</label>
+              <input
+                type="number"
+                min="0"
+                value={discountAmount}
+                onChange={(e) => setDiscountAmount(Number(e.target.value))}
+                className="w-full p-2 bg-white border border-slate-300 rounded-lg font-bold text-red-600 outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-600 mb-1">Delivery Charge (৳)</label>
+              <input
+                type="number"
+                min="0"
+                value={deliveryCharge}
+                onChange={(e) => setDeliveryCharge(Number(e.target.value))}
+                className="w-full p-2 bg-white border border-slate-300 rounded-lg font-bold text-slate-900 outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="flex justify-between items-center p-3 bg-blue-950 text-white rounded-xl">
+            <span className="font-bold">Grand Total (কোটেশন মোট):</span>
+            <span className="text-base font-black">৳{calculatedGrandTotal.toLocaleString()}</span>
+          </div>
+
+          {/* Terms & Conditions */}
+          <div>
+            <label className="block font-semibold text-slate-700 mb-1">Terms & Conditions (শর্তাবলী)</label>
+            <textarea
+              rows={2}
+              value={terms}
+              onChange={(e) => setTerms(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 p-2 font-medium text-slate-900 outline-none"
+            />
+          </div>
+
+        </form>
+
+        {/* Modal Fixed Footer */}
+        <div className="shrink-0 bg-slate-50 border-t border-slate-200 px-5 py-3 flex items-center justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold cursor-pointer transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form="new-quotation-form"
+            className="px-5 py-2 rounded-xl bg-blue-900 hover:bg-blue-800 text-white font-bold cursor-pointer shadow-md transition-all active:scale-98"
+          >
+            {quotationToEdit ? 'Update Quotation' : 'Save & Generate Quotation'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};

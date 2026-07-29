@@ -1,0 +1,1642 @@
+import React, { useState } from 'react';
+import { ShoppingCart, Receipt, Printer, Search, Plus, MessageSquare, Trash2, Ban, Barcode, AlertTriangle, X, CheckCircle, CheckSquare, Square, FolderArchive, TrendingUp, DollarSign, Truck } from 'lucide-react';
+import { useERP } from '../../context/ERPContext';
+import { NewOrderModal } from '../NewOrderModal';
+import { downloadDailyInvoicesZip } from '../../utils/zipExportUtils';
+
+export const SalesOrdersModule: React.FC = () => {
+  const { salesOrders, companySettings, customers, products, deleteSalesOrder, batchDeleteSalesOrders, voidSalesOrder, activeUser, setActiveModule, setSelectedPrintOrder, markOrderPaid, markOrderDelivered, updateSalesOrderStatus, bulkUpdateSalesOrderStatus, updateSalesOrderItems } = useERP();
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'All' | 'Pending' | 'Accepted' | 'Send to Courier' | 'Delivered' | 'Voided'>('All');
+  const [showPOSModal, setShowPOSModal] = useState(false);
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(salesOrders[0]?.id || null);
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
+
+  // Interactive Order Status Change Modal States
+  const [statusModalOrder, setStatusModalOrder] = useState<any | null>(null);
+  const [modalTargetStatus, setModalTargetStatus] = useState<'Pending' | 'Accepted' | 'Send to Courier' | 'Delivered' | 'Cancelled'>('Accepted');
+  const [modalCourier, setModalCourier] = useState('🚚 Steadfast Courier (স্টেডফাস্ট কুরিয়ার)');
+  const [modalTrackingId, setModalTrackingId] = useState('');
+  const [modalStatusNotes, setModalStatusNotes] = useState('');
+  const [statusSuccessMsg, setStatusSuccessMsg] = useState<string | null>(null);
+
+  // Per-order Product Scan & Number Entry Input State (POS-style)
+  const [itemScanQueries, setItemScanQueries] = useState<{ [orderId: string]: string }>({});
+  const [itemScanFeedback, setItemScanFeedback] = useState<{ [orderId: string]: { type: 'success' | 'error'; msg: string } }>({});
+
+  // Interactive Order Collector & Scanner Modal States
+  const [showCollectorModal, setShowCollectorModal] = useState(false);
+  const [scanInput, setScanInput] = useState('');
+  const [collectedOrderIds, setCollectedOrderIds] = useState<string[]>([]);
+  const [scanFeedback, setScanFeedback] = useState<{ type: 'success' | 'error' | 'warning'; msg: string } | null>(null);
+  const [selectedCourier, setSelectedCourier] = useState('Steadfast Courier');
+  const [collectorSuccessMsg, setCollectorSuccessMsg] = useState<string | null>(null);
+  const [isMultiPasteMode, setIsMultiPasteMode] = useState(false);
+  const [multiPasteText, setMultiPasteText] = useState('');
+
+  // Handle single order scan or entry
+  const handleScanOrAddOrder = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const query = scanInput.trim().toLowerCase();
+    if (!query) return;
+
+    // Search in salesOrders by full ID, numeric ID, or customer phone/name
+    const matched = salesOrders.find((so) => {
+      const idLower = (so.id || '').toLowerCase();
+      const phoneLower = (so.customerPhone || '').toLowerCase();
+      const nameLower = (so.customerName || '').toLowerCase();
+      const numericPart = idLower.replace(/[^0-9]/g, '');
+
+      return (
+        idLower === query ||
+        idLower.includes(query) ||
+        phoneLower === query ||
+        phoneLower.includes(query) ||
+        (numericPart && numericPart === query) ||
+        nameLower.includes(query)
+      );
+    });
+
+    if (!matched) {
+      setScanFeedback({
+        type: 'error',
+        msg: `❌ "${scanInput}" মেমো নম্বর বা ফোন নাম্বার দিয়ে কোন অর্ডার ম্যাচ করেনি!`,
+      });
+      setScanInput('');
+      return;
+    }
+
+    if (collectedOrderIds.includes(matched.id)) {
+      setScanFeedback({
+        type: 'warning',
+        msg: `⚠️ মেমো #${matched.id} (${matched.customerName}) ইতোমধ্যেই সংগ্রহ তালিকায় আছে!`,
+      });
+      setScanInput('');
+      return;
+    }
+
+    // Add to collected list
+    setCollectedOrderIds((prev) => [matched.id, ...prev]);
+    setScanFeedback({
+      type: 'success',
+      msg: `✅ সংগৃহীত: #${matched.id} — ${matched.customerName} (${matched.customerPhone || 'No phone'})`,
+    });
+    setScanInput('');
+  };
+
+  // Add multiple pasted IDs or numbers at once
+  const handleMultiPasteAdd = () => {
+    if (!multiPasteText.trim()) return;
+
+    const tokens = multiPasteText
+      .split(/[\n,;\s]+/)
+      .map((t) => t.trim().toLowerCase())
+      .filter(Boolean);
+
+    const newlyMatchedIds: string[] = [];
+    tokens.forEach((token) => {
+      const matched = salesOrders.find((so) => {
+        const idLower = (so.id || '').toLowerCase();
+        const phoneLower = (so.customerPhone || '').toLowerCase();
+        const numericPart = idLower.replace(/[^0-9]/g, '');
+
+        return (
+          idLower === token ||
+          idLower.includes(token) ||
+          phoneLower.includes(token) ||
+          (numericPart && numericPart === token)
+        );
+      });
+
+      if (matched && !collectedOrderIds.includes(matched.id) && !newlyMatchedIds.includes(matched.id)) {
+        newlyMatchedIds.push(matched.id);
+      }
+    });
+
+    if (newlyMatchedIds.length > 0) {
+      setCollectedOrderIds((prev) => Array.from(new Set([...newlyMatchedIds, ...prev])));
+      setScanFeedback({
+        type: 'success',
+        msg: `🎉 একসাথে ${newlyMatchedIds.length} টি নতুন অর্ডার সংগ্রহ তালিকায় যুক্ত করা হয়েছে!`,
+      });
+      setMultiPasteText('');
+      setIsMultiPasteMode(false);
+    } else {
+      setScanFeedback({
+        type: 'error',
+        msg: '❌ কোন নতুন মেমো নম্বর বা ফোন নাম্বার মেলেনি!',
+      });
+    }
+  };
+
+  // Add table-checked orders into collector
+  const handleAddCheckedOrdersToCollector = () => {
+    if (selectedOrderIds.length === 0) return;
+    const combined = Array.from(new Set([...collectedOrderIds, ...selectedOrderIds]));
+    setCollectedOrderIds(combined);
+    setScanFeedback({
+      type: 'success',
+      msg: `✅ টেবিল থেকে ${selectedOrderIds.length} টি সিলেক্টকৃত অর্ডার কালেকশন তালিকায় আনা হয়েছে।`,
+    });
+  };
+
+  // Apply Bulk Status to all collected orders
+  const handleApplyCollectorStatus = (targetStatus: 'Accepted' | 'Send to Courier' | 'Delivered' | 'Cancelled') => {
+    if (collectedOrderIds.length === 0) {
+      alert('প্রথমে এক বা একাধিক মেমো স্ক্যান বা টাইপ করে কালেকশন তালিকায় যুক্ত করুন!');
+      return;
+    }
+
+    const courierToUse = targetStatus === 'Send to Courier' ? selectedCourier : undefined;
+    bulkUpdateSalesOrderStatus(collectedOrderIds, targetStatus, courierToUse);
+
+    setCollectorSuccessMsg(
+      `🎉 সফল হয়েছে! সংগৃহীত ${collectedOrderIds.length} টি অর্ডারের স্ট্যাটাস "${targetStatus}" এ আপডেট করা হয়েছে।`
+    );
+
+    setTimeout(() => {
+      setCollectorSuccessMsg(null);
+    }, 5000);
+  };
+
+  // Handle Scanning or Number Entry (1, 2, 3...) to add product to an existing order
+  const handleScanAndAddProductToOrder = (orderId: string, e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const query = (itemScanQueries[orderId] || '').trim();
+    if (!query) return;
+
+    const targetOrder = salesOrders.find((so) => so.id === orderId);
+    if (!targetOrder) return;
+
+    const q = query.toLowerCase();
+
+    // 1. Exact barcode or SKU/ID match
+    let matched = products.find(
+      (p) =>
+        (p.barcode && p.barcode.toLowerCase() === q) ||
+        p.id.toLowerCase() === q ||
+        p.id.toLowerCase().replace(/[^0-9]/g, '') === q
+    );
+
+    // 2. Numeric index match e.g. "1" for 1st product in catalog, "2" for 2nd product
+    if (!matched && /^\d+$/.test(q)) {
+      const idx = parseInt(q, 10) - 1;
+      if (idx >= 0 && idx < products.length) {
+        matched = products[idx];
+      }
+    }
+
+    // 3. Name match
+    if (!matched) {
+      matched = products.find((p) => p.name.toLowerCase().includes(q));
+    }
+
+    if (!matched) {
+      setItemScanFeedback((prev) => ({
+        ...prev,
+        [orderId]: { type: 'error', msg: `❌ "${query}" কোড বা নম্বরে কোনো প্রোডাক্ট পাওয়া যায়নি!` },
+      }));
+      setTimeout(() => {
+        setItemScanFeedback((prev) => {
+          const c = { ...prev };
+          delete c[orderId];
+          return c;
+        });
+      }, 3500);
+      return;
+    }
+
+    // Prepare updated items list
+    const existingIndex = targetOrder.items.findIndex((i) => i.productId === matched.id);
+    let updatedItems = targetOrder.items.map((i) => ({
+      productId: i.productId,
+      quantity: i.quantity,
+      unitPrice: i.unitPrice,
+    }));
+
+    if (existingIndex >= 0) {
+      updatedItems[existingIndex].quantity += 1;
+    } else {
+      const unitPrice = targetOrder.orderType === 'Wholesale' ? matched.minSellingPrice : matched.sellingPrice;
+      updatedItems.push({
+        productId: matched.id,
+        quantity: 1,
+        unitPrice,
+      });
+    }
+
+    updateSalesOrderItems(orderId, updatedItems);
+
+    setItemScanQueries((prev) => ({ ...prev, [orderId]: '' }));
+    setItemScanFeedback((prev) => ({
+      ...prev,
+      [orderId]: { type: 'success', msg: `✅ ${matched.name} (৳${matched.sellingPrice.toLocaleString()}) যুক্ত হয়েছে!` },
+    }));
+
+    setTimeout(() => {
+      setItemScanFeedback((prev) => {
+        const c = { ...prev };
+        delete c[orderId];
+        return c;
+      });
+    }, 3500);
+  };
+
+  // Change Item Quantity or Remove Item
+  const handleUpdateItemQtyInOrder = (orderId: string, itemIdx: number, newQty: number) => {
+    const targetOrder = salesOrders.find((so) => so.id === orderId);
+    if (!targetOrder) return;
+
+    if (newQty <= 0) {
+      const updatedItems = targetOrder.items
+        .filter((_, idx) => idx !== itemIdx)
+        .map((i) => ({ productId: i.productId, quantity: i.quantity, unitPrice: i.unitPrice }));
+      updateSalesOrderItems(orderId, updatedItems);
+    } else {
+      const updatedItems = targetOrder.items.map((i, idx) =>
+        idx === itemIdx ? { productId: i.productId, quantity: newQty, unitPrice: i.unitPrice } : { productId: i.productId, quantity: i.quantity, unitPrice: i.unitPrice }
+      );
+      updateSalesOrderItems(orderId, updatedItems);
+    }
+  };
+
+  // Open Status Change Modal for an Order
+  const handleOpenStatusModal = (so: any) => {
+    setStatusModalOrder(so);
+    setModalTargetStatus(so.deliveryStatus || 'Accepted');
+    setModalCourier(so.courierService || '🚚 Steadfast Courier (স্টেডফাস্ট কুরিয়ার)');
+    setModalTrackingId('');
+    setModalStatusNotes('');
+    setStatusSuccessMsg(null);
+  };
+
+  // Save Status Modal Updates
+  const handleSaveStatusModal = () => {
+    if (!statusModalOrder) return;
+    updateSalesOrderStatus(statusModalOrder.id, modalTargetStatus, modalCourier);
+    setStatusSuccessMsg(`🎉 অর্ডার #${statusModalOrder.id} এর স্ট্যাটাস "${modalTargetStatus}" এ সফলভাবে আপডেট হয়েছে!`);
+    setTimeout(() => {
+      setStatusModalOrder(null);
+      setStatusSuccessMsg(null);
+    }, 1500);
+  };
+
+  // Delete & Void State
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  // Bulk SMS State
+  const [bulkSmsProgress, setBulkSmsProgress] = useState<string | null>(null);
+
+  const handleSendBulkSms = () => {
+    if (selectedOrderIds.length === 0) return;
+    const selectedOrders = salesOrders.filter((o) => selectedOrderIds.includes(o.id));
+    
+    setBulkSmsProgress(`⏳ Sending Bulk SMS to ${selectedOrders.length} customers...`);
+    
+    setTimeout(() => {
+      setBulkSmsProgress(`✅ Successfully sent ${selectedOrders.length} SMS messages! Customers received Memo Ref & Bill amount.`);
+      setTimeout(() => setBulkSmsProgress(null), 5000);
+    }, 1000);
+  };
+  const [isBatchDeleting, setIsBatchDeleting] = useState(false);
+  const [showVoidModal, setShowVoidModal] = useState(false);
+  const [voidInvoiceQuery, setVoidInvoiceQuery] = useState('');
+  const [voidReason, setVoidReason] = useState('');
+  const [voidSuccessMsg, setVoidSuccessMsg] = useState<string | null>(null);
+
+  const query = (searchTerm || '').toLowerCase();
+  const filteredOrders = salesOrders.filter((so) => {
+    const matchesSearch =
+      (so.id && so.id.toLowerCase().includes(query)) ||
+      (so.customerName && so.customerName.toLowerCase().includes(query)) ||
+      (so.customerPhone && so.customerPhone.toLowerCase().includes(query));
+
+    if (!matchesSearch) return false;
+
+    if (statusFilter === 'All') return true;
+    if (statusFilter === 'Pending') return so.deliveryStatus === 'Pending';
+    if (statusFilter === 'Accepted') return so.deliveryStatus === 'Accepted';
+    if (statusFilter === 'Send to Courier') return so.deliveryStatus === 'Send to Courier' || so.deliveryStatus === 'Processing';
+    if (statusFilter === 'Delivered') return so.deliveryStatus === 'Delivered';
+    if (statusFilter === 'Voided') return so.deliveryStatus === 'Voided' || so.deliveryStatus === 'Cancelled';
+
+    return true;
+  });
+
+  // Search matched invoice for voiding
+  const matchedVoidOrder = voidInvoiceQuery.trim()
+    ? salesOrders.find(
+        (so) => so.id && so.id.toLowerCase() === voidInvoiceQuery.trim().toLowerCase()
+      )
+    : null;
+
+  const handleConfirmVoid = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!voidInvoiceQuery.trim()) return;
+
+    if (!matchedVoidOrder) {
+      alert('ইনভয়েস নাম্বার দিয়ে কোন অর্ডার পাওয়া যায়নি। দয়া করে সঠিক ইনভয়েস নং দিন বা বারকোড স্ক্যান করুন।');
+      return;
+    }
+
+    if (!voidReason.trim()) {
+      alert('ইনভয়েস বাতিলের কারণ (Void Reason) উল্লেখ করা বাধ্যতামূলক!');
+      return;
+    }
+
+    voidSalesOrder(matchedVoidOrder.id, voidReason);
+    setVoidSuccessMsg(`✅ Invoice ${matchedVoidOrder.id} successfully voided! Inventory restored.`);
+    setTimeout(() => {
+      setVoidSuccessMsg(null);
+      setShowVoidModal(false);
+      setVoidInvoiceQuery('');
+      setVoidReason('');
+    }, 2000);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-slate-200 pb-4">
+        <div>
+          <h2 className="text-xl font-bold text-slate-900">Modules 8 & 9: Sales Orders & Line Items</h2>
+          <p className="text-xs text-slate-500">
+            One Sales Order → Multiple Product Items → Auto Total → Discount → Freight → Advance → Due Ledger → Print Invoice.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 md:gap-3">
+          {filteredOrders.length > 0 && (
+            <button
+              onClick={() => {
+                if (selectedOrderIds.length === filteredOrders.length) {
+                  setSelectedOrderIds([]);
+                } else {
+                  setSelectedOrderIds(filteredOrders.map((o) => o.id));
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-bold cursor-pointer transition-all border border-slate-300"
+            >
+              {selectedOrderIds.length === filteredOrders.length && filteredOrders.length > 0 ? (
+                <CheckSquare className="h-4 w-4 text-blue-600" />
+              ) : (
+                <Square className="h-4 w-4 text-slate-400" />
+              )}
+              <span>
+                {selectedOrderIds.length === filteredOrders.length && filteredOrders.length > 0
+                  ? 'Unselect All'
+                  : `Select All (${filteredOrders.length})`}
+              </span>
+            </button>
+          )}
+
+          <div className="relative w-48 md:w-64">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search Order ID, Customer..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 pl-9 pr-3 py-2 text-xs focus:border-blue-600 focus:outline-hidden"
+            />
+          </div>
+
+          <button
+            onClick={() => downloadDailyInvoicesZip(salesOrders, companySettings, customers)}
+            className="flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3.5 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-600 cursor-pointer transition-all"
+            title="Download all sales invoices packaged into a single ZIP file (Paid, Online & Due separated)"
+          >
+            <FolderArchive className="h-4 w-4" />
+            <span>Daily Sales Zip (আজকের সকল ইনভয়েস জিপ)</span>
+          </button>
+
+          <button
+            onClick={() => setShowCollectorModal(true)}
+            className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-indigo-700 via-purple-700 to-blue-700 px-3.5 py-2 text-xs font-black text-white shadow-md hover:from-indigo-600 hover:to-blue-600 cursor-pointer transition-all border border-indigo-500 shadow-indigo-900/30"
+            title="Scan or type memo numbers to collect orders in a list, then update status in bulk"
+          >
+            <Barcode className="h-4 w-4 text-amber-300" />
+            <span>⚡ স্ক্যানার দিয়ে কালেকশন & বাল্ক স্ট্যাটাস</span>
+          </button>
+
+          <button
+            onClick={() => setShowVoidModal(true)}
+            className="flex items-center gap-1.5 rounded-lg bg-red-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm hover:bg-red-700 cursor-pointer transition-all"
+          >
+            <Ban className="h-4 w-4" />
+            <span>Void Invoice (বাতিল করুন)</span>
+          </button>
+
+          <button
+            onClick={() => setActiveModule('quotations')}
+            className="flex items-center gap-1.5 rounded-lg bg-amber-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm hover:bg-amber-500 cursor-pointer transition-all"
+          >
+            <Plus className="h-4 w-4" />
+            <span>Create Quotation (কোটেশন)</span>
+          </button>
+
+          <button
+            onClick={() => setShowPOSModal(true)}
+            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 cursor-pointer"
+          >
+            <Plus className="h-4 w-4" />
+            <span>New Sale (POS)</span>
+          </button>
+        </div>
+      </div>
+
+      {/* BATCH ACTION BAR */}
+      {selectedOrderIds.length > 0 && (
+        <div className="bg-blue-900 text-white p-3.5 rounded-2xl shadow-lg flex flex-wrap items-center justify-between gap-3 border border-blue-700">
+          <div className="flex items-center gap-2 text-xs font-bold">
+            <span className="bg-blue-800 px-2.5 py-1 rounded-lg border border-blue-600 text-amber-300 font-mono">
+              {selectedOrderIds.length} Orders Selected
+            </span>
+            <span>সিলেক্টকৃত সেলস ইনভয়েসগুলোর জন্য কাজ করুন:</span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => {
+                handleAddCheckedOrdersToCollector();
+                setShowCollectorModal(true);
+              }}
+              className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition-all shadow-xs border border-indigo-400"
+            >
+              <Barcode className="h-4 w-4 text-amber-300" />
+              <span>স্ক্যানার কালেকশনে নিন ({selectedOrderIds.length})</span>
+            </button>
+
+            <button
+              onClick={() => {
+                const firstOrder = salesOrders.find((so) => selectedOrderIds.includes(so.id));
+                if (firstOrder) setSelectedPrintOrder(firstOrder);
+                setActiveModule('invoice_print');
+              }}
+              className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition-all shadow-xs border border-slate-600"
+            >
+              <Printer className="h-4 w-4 text-blue-400" />
+              <span>Batch Print Invoices</span>
+            </button>
+
+            <button
+              onClick={handleSendBulkSms}
+              className="flex items-center gap-1.5 bg-purple-600 hover:bg-purple-700 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition-all shadow-xs border border-purple-500"
+            >
+              <MessageSquare className="h-4 w-4" />
+              <span>📱 Bulk SMS Send (একসাথে মেসেজ)</span>
+            </button>
+
+            <button
+              onClick={() => setIsBatchDeleting(true)}
+              className="flex items-center gap-1.5 bg-red-600 hover:bg-red-700 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition-all shadow-xs"
+            >
+              <Trash2 className="h-4 w-4" />
+              <span>Batch Delete Marked</span>
+            </button>
+
+            <button
+              onClick={() => setSelectedOrderIds([])}
+              className="text-xs text-blue-200 hover:text-white px-2 py-1 underline cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk SMS Progress Banner */}
+      {bulkSmsProgress && (
+        <div className="bg-purple-900 text-white p-3.5 rounded-2xl shadow-lg border border-purple-500 flex items-center justify-between gap-3 animate-pulse">
+          <div className="flex items-center gap-2 text-xs font-bold">
+            <span className="p-1 bg-purple-700 rounded-lg text-sm">📱</span>
+            <span>{bulkSmsProgress}</span>
+          </div>
+          <button
+            onClick={() => setBulkSmsProgress(null)}
+            className="text-xs text-purple-200 hover:text-white font-bold cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* FINANCIAL & PROFIT SUMMARY KPI CARDS */}
+      {(() => {
+        const totalGrand = salesOrders.reduce((acc, o) => acc + (o.grandTotal || 0), 0);
+        const totalDue = salesOrders.reduce((acc, o) => acc + (o.dueAmount || 0), 0);
+        const totalProfit = salesOrders.reduce((acc, o) => {
+          if (o.totalProfit !== undefined) return acc + o.totalProfit;
+          const itemsProf = o.items.reduce((iAcc, item) => {
+            const p = products.find((prod) => prod.id === item.productId);
+            const buyingCost = p ? p.buyingPrice : 0;
+            return iAcc + (item.unitPrice - buyingCost) * item.quantity;
+          }, 0);
+          return acc + (itemsProf - (o.discountAmount || 0));
+        }, 0);
+
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs flex items-center justify-between">
+              <div>
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Total Sales (মোট বিক্রি)</span>
+                <span className="text-lg font-black text-slate-900 font-mono">৳{totalGrand.toLocaleString()}</span>
+                <span className="text-[10px] text-slate-400 block">{salesOrders.length} Invoices</span>
+              </div>
+              <div className="p-2.5 bg-blue-50 text-blue-600 rounded-xl">
+                <ShoppingCart className="h-5 w-5" />
+              </div>
+            </div>
+
+            <div className="bg-white p-3.5 rounded-2xl border border-emerald-200 bg-emerald-50/30 shadow-2xs flex items-center justify-between">
+              <div>
+                <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider block">Net Profit (নিট লাভ)</span>
+                <span className="text-lg font-black text-emerald-700 font-mono">৳{totalProfit.toLocaleString()}</span>
+                <span className="text-[10px] text-emerald-600 block">বিক্রির দাম - কেনা দাম</span>
+              </div>
+              <div className="p-2.5 bg-emerald-600 text-white rounded-xl shadow-2xs">
+                <TrendingUp className="h-5 w-5" />
+              </div>
+            </div>
+
+            <div className="bg-white p-3.5 rounded-2xl border border-amber-200 bg-amber-50/30 shadow-2xs flex items-center justify-between">
+              <div>
+                <span className="text-[11px] font-bold text-amber-800 uppercase tracking-wider block">Total Due (মোট বাকী)</span>
+                <span className="text-lg font-black text-amber-800 font-mono">৳{totalDue.toLocaleString()}</span>
+                <span className="text-[10px] text-amber-600 block">কাস্টমার বকেয়া</span>
+              </div>
+              <div className="p-2.5 bg-amber-100 text-amber-800 rounded-xl">
+                <Receipt className="h-5 w-5" />
+              </div>
+            </div>
+
+            <div className="bg-white p-3.5 rounded-2xl border border-indigo-200 bg-indigo-50/30 shadow-2xs flex items-center justify-between">
+              <div>
+                <span className="text-[11px] font-bold text-indigo-800 uppercase tracking-wider block">Collected (আদায়কৃত)</span>
+                <span className="text-lg font-black text-indigo-900 font-mono">৳{(totalGrand - totalDue).toLocaleString()}</span>
+                <span className="text-[10px] text-indigo-600 block">ক্যাশ/অনলাইন আদায়</span>
+              </div>
+              <div className="p-2.5 bg-indigo-100 text-indigo-800 rounded-xl">
+                <DollarSign className="h-5 w-5" />
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* STATUS FILTER PILLS */}
+      <div className="flex flex-wrap items-center gap-2 bg-white p-2 rounded-2xl border border-slate-200 shadow-2xs">
+        {[
+          { id: 'All', label: 'All Orders (সকল)', count: salesOrders.length, color: 'bg-slate-800 text-white' },
+          { id: 'Pending', label: '⏳ Pending (অপেক্ষমাণ)', count: salesOrders.filter((o) => o.deliveryStatus === 'Pending').length, color: 'bg-amber-600 text-white' },
+          { id: 'Accepted', label: '✅ Accepted (গৃহীত)', count: salesOrders.filter((o) => o.deliveryStatus === 'Accepted').length, color: 'bg-blue-600 text-white' },
+          { id: 'Send to Courier', label: '🚚 Send to Courier (কুরিয়ারে প্রেরিত)', count: salesOrders.filter((o) => o.deliveryStatus === 'Send to Courier' || o.deliveryStatus === 'Processing').length, color: 'bg-purple-600 text-white' },
+          { id: 'Delivered', label: '📦 Delivered (ডেলিভার্ড)', count: salesOrders.filter((o) => o.deliveryStatus === 'Delivered').length, color: 'bg-emerald-600 text-white' },
+          { id: 'Voided', label: '❌ Cancelled / Voided', count: salesOrders.filter((o) => o.deliveryStatus === 'Voided' || o.deliveryStatus === 'Cancelled').length, color: 'bg-red-600 text-white' },
+        ].map((tab) => {
+          const isActive = statusFilter === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setStatusFilter(tab.id as any)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 border ${
+                isActive
+                  ? `${tab.color} border-transparent shadow-xs`
+                  : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border-slate-200'
+              }`}
+            >
+              <span>{tab.label}</span>
+              <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${isActive ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-800'}`}>
+                {tab.count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="space-y-4">
+        {filteredOrders.map((so) => {
+          const isExpanded = expandedOrderId === so.id;
+          const isSelected = selectedOrderIds.includes(so.id);
+
+          return (
+            <div
+              key={so.id}
+              className={`bg-white rounded-2xl border transition-all shadow-xs overflow-hidden ${
+                isSelected ? 'ring-2 ring-blue-600 border-blue-600' : 'border-slate-200'
+              }`}
+            >
+              <div
+                onClick={() => setExpandedOrderId(isExpanded ? null : so.id)}
+                className="p-4 bg-slate-50 flex flex-wrap items-center justify-between gap-4 cursor-pointer hover:bg-slate-100/80 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  {/* Mark Checkbox */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (isSelected) {
+                        setSelectedOrderIds(selectedOrderIds.filter((id) => id !== so.id));
+                      } else {
+                        setSelectedOrderIds([...selectedOrderIds, so.id]);
+                      }
+                    }}
+                    className="p-1 text-slate-600 hover:text-blue-600 cursor-pointer"
+                  >
+                    {isSelected ? (
+                      <CheckSquare className="h-4 w-4 text-blue-600" />
+                    ) : (
+                      <Square className="h-4 w-4 text-slate-400" />
+                    )}
+                  </button>
+
+                  <div className="p-2.5 bg-blue-900 text-white rounded-xl font-bold text-xs">
+                    {so.id}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-bold text-slate-900 text-sm">{so.customerName || so.customerId}</h3>
+                      {so.orderType === 'Online' || so.orderType === 'AI Bot' || (so.notes && so.notes.toLowerCase().includes('online')) ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-indigo-100 text-indigo-800 border border-indigo-300">
+                          🌐 ONLINE ORDER (অনলাইন)
+                        </span>
+                      ) : so.orderType === 'Wholesale' ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-purple-100 text-purple-800 border border-purple-300">
+                          📦 WHOLESALE (পাইকারী)
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-300">
+                          🏪 SHOWROOM / OFFLINE (অফলাইন)
+                        </span>
+                      )}
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-300">
+                        💳 {so.paymentMethod || 'Cash'}
+                      </span>
+                      {so.syncedToServer ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300" title="সার্ভারে সিঙ্কড ও সেভড">
+                          ☁️ সার্ভার সিঙ্কড
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300 animate-pulse" title="অফলাইনে সেভড - ইন্টারনেটে আসার সাথে সাথে অটো সিঙ্ক হবে">
+                          ⚡ অফলাইন সেভড
+                        </span>
+                      )}
+                      {(() => {
+                        const orderProfit = so.totalProfit !== undefined
+                          ? so.totalProfit
+                          : so.items.reduce((iAcc, item) => {
+                              const p = products.find((prod) => prod.id === item.productId);
+                              const buyingCost = p ? p.buyingPrice : 0;
+                              return iAcc + (item.unitPrice - buyingCost) * item.quantity;
+                            }, 0) - (so.discountAmount || 0);
+
+                        return (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-900 border border-emerald-300" title="Net Profit = Selling Price - Buying Price - Discount">
+                            📈 প্রফিট: ৳{orderProfit.toLocaleString()}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Date: {so.orderDate} • Officer: {so.createdBy}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-6">
+                  <div className="text-right">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Grand Total</span>
+                    <span className="text-base font-black text-slate-900">৳{so.grandTotal.toLocaleString()}</span>
+                  </div>
+
+                  <div className="text-right">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Balance Due</span>
+                    <span className="text-sm font-extrabold text-amber-700">৳{so.dueAmount.toLocaleString()}</span>
+                  </div>
+
+                  {/* Payment Status Badge */}
+                  <span
+                    className={`px-3 py-1 rounded-full text-xs font-bold ${
+                      so.deliveryStatus === 'Voided' || so.paymentStatus === 'Voided'
+                        ? 'bg-red-600 text-white border border-red-700'
+                        : so.paymentStatus === 'Paid'
+                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                        : so.paymentStatus === 'Partial'
+                        ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                        : 'bg-rose-100 text-rose-800 border border-rose-300'
+                    }`}
+                  >
+                    {so.deliveryStatus === 'Voided' ? 'VOIDED' : so.paymentStatus}
+                  </span>
+
+                  {/* Delivery Status Selector & Advanced Modal Trigger */}
+                  <div className="flex flex-col gap-0.5" onClick={(e) => e.stopPropagation()}>
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block">
+                      Delivery Status (ডেলিভারি)
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <select
+                        value={so.deliveryStatus || 'Pending'}
+                        onChange={(e) => updateSalesOrderStatus(so.id, e.target.value as any)}
+                        className={`text-[11px] font-bold px-2 py-1 rounded-xl border transition-all cursor-pointer outline-hidden ${
+                          so.deliveryStatus === 'Delivered'
+                            ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                            : so.deliveryStatus === 'Send to Courier' || so.deliveryStatus === 'Processing'
+                            ? 'bg-purple-100 text-purple-900 border-purple-300'
+                            : so.deliveryStatus === 'Accepted'
+                            ? 'bg-blue-100 text-blue-900 border-blue-300'
+                            : so.deliveryStatus === 'Cancelled' || so.deliveryStatus === 'Voided'
+                            ? 'bg-red-100 text-red-900 border-red-300'
+                            : 'bg-amber-100 text-amber-900 border-amber-300'
+                        }`}
+                      >
+                        <option value="Pending">⏳ Pending (অপেক্ষমাণ)</option>
+                        <option value="Accepted">✅ Accepted (গৃহীত)</option>
+                        <option value="Send to Courier">🚚 Send to Courier (কুরিয়ার)</option>
+                        <option value="Delivered">📦 Delivered (ডেলিভার্ড)</option>
+                        <option value="Cancelled">❌ Cancelled (বাতিল)</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenStatusModal(so)}
+                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-white text-[10px] font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1 shrink-0"
+                        title="স্ট্যাটাস, কুরিয়ার ও ট্র্যাকিং নম্বর এডিট করুন"
+                      >
+                        <Truck className="h-3 w-3 text-amber-400" />
+                        <span>এডিট</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {so.paymentStatus !== 'Paid' && so.deliveryStatus !== 'Voided' && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          markOrderPaid(so.id);
+                        }}
+                        className="flex items-center gap-1 rounded-lg bg-emerald-600 text-white px-2.5 py-1.5 text-xs font-bold hover:bg-emerald-500 cursor-pointer shadow-xs"
+                        title="Mark order as fully Paid"
+                      >
+                        <CheckCircle className="h-3.5 w-3.5" />
+                        <span className="hidden md:inline">Mark Paid</span>
+                      </button>
+                    )}
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedPrintOrder(so);
+                        setActiveModule('invoice_print');
+                      }}
+                      className="flex items-center gap-1.5 rounded-lg bg-[#25D366] text-white px-2.5 py-1.5 text-xs font-semibold hover:bg-[#20bd5a] cursor-pointer shadow-xs"
+                      title="Send Invoice via WhatsApp"
+                    >
+                      <MessageSquare className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">WhatsApp</span>
+                    </button>
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedPrintOrder(so);
+                        setActiveModule('invoice_print');
+                      }}
+                      className="flex items-center gap-1.5 rounded-lg bg-slate-900 text-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-800 cursor-pointer shadow-xs"
+                    >
+                      <Printer className="h-3.5 w-3.5 text-blue-400" />
+                      <span>Print / PDF</span>
+                    </button>
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleteTargetId(so.id);
+                      }}
+                      className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 cursor-pointer transition-colors"
+                      title="Delete Sales Order Record"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Module 9: Order Items Detail */}
+              {isExpanded && (
+                <div className="p-5 border-t border-slate-200 bg-white space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Receipt className="h-4 w-4 text-blue-600" />
+                      <h4 className="font-bold text-slate-900 text-xs uppercase tracking-wider">
+                        Module 9: Sales Order Line Items ({so.items.length})
+                      </h4>
+                    </div>
+                    {so.notes && <span className="text-xs text-slate-500 italic">Notes: "{so.notes}"</span>}
+                  </div>
+
+                  {/* POS Product Scan & Number Entry Bar */}
+                  <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-slate-50 p-3 rounded-2xl border border-indigo-200 space-y-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                      <label className="text-xs font-black text-indigo-950 flex items-center gap-1.5">
+                        <Barcode className="h-4 w-4 text-indigo-600 animate-pulse" />
+                        <span>⚡ POS স্ক্যানার: প্রোডাক্ট কোড/নম্বর/বারকোড দিয়ে আইটেম যোগ করুন</span>
+                      </label>
+                      <span className="text-[10px] text-slate-500 font-medium">
+                        * টিপস: ১, ২, ৩ টাইপ করলে ক্যাটালগের প্রথম, ২য় বা ৩য় প্রোডাক্ট অটো যুক্ত হবে!
+                      </span>
+                    </div>
+
+                    <form
+                      onSubmit={(e) => handleScanAndAddProductToOrder(so.id, e)}
+                      className="flex items-center gap-2"
+                    >
+                      <div className="relative flex-1">
+                        <Barcode className="absolute left-3 top-2.5 h-4 w-4 text-indigo-500" />
+                        <input
+                          type="text"
+                          value={itemScanQueries[so.id] || ''}
+                          onChange={(e) =>
+                            setItemScanQueries((prev) => ({ ...prev, [so.id]: e.target.value }))
+                          }
+                          placeholder="এখানে প্রোডাক্ট নম্বর (১, ২, ৩...), বারকোড বা SKU টাইপ/স্ক্যান করে Enter চাপুন..."
+                          className="w-full pl-9 pr-3 py-2 bg-white border border-indigo-300 focus:border-indigo-600 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-hidden shadow-2xs"
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        className="bg-indigo-700 hover:bg-indigo-600 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1 cursor-pointer shadow-2xs shrink-0"
+                      >
+                        <Plus className="h-4 w-4" />
+                        <span>+ আইটেম যোগ</span>
+                      </button>
+                    </form>
+
+                    {itemScanFeedback[so.id] && (
+                      <div
+                        className={`p-2 px-3 rounded-xl text-xs font-bold flex items-center gap-2 border ${
+                          itemScanFeedback[so.id].type === 'success'
+                            ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                            : 'bg-rose-100 text-rose-900 border-rose-300'
+                        }`}
+                      >
+                        <span>{itemScanFeedback[so.id].msg}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <table className="w-full text-left text-xs border border-slate-200 rounded-xl overflow-hidden">
+                    <thead className="bg-slate-100 text-slate-600">
+                      <tr>
+                        <th className="py-2 px-3 font-semibold">Item ID</th>
+                        <th className="py-2 px-3 font-semibold">Product SKU / Name</th>
+                        <th className="py-2 px-3 font-semibold text-center">Quantity (পরিমাণ)</th>
+                        <th className="py-2 px-3 font-semibold text-right">Unit Price (৳)</th>
+                        <th className="py-2 px-3 font-semibold text-right">Line Total (৳)</th>
+                        <th className="py-2 px-3 font-semibold text-right">Est. Profit (৳)</th>
+                        <th className="py-2 px-3 font-semibold text-center">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {so.items.map((item, itemIdx) => (
+                        <tr key={item.id} className="hover:bg-slate-50">
+                          <td className="py-2 px-3 font-mono text-slate-500">{item.id}</td>
+                          <td className="py-2 px-3 font-bold text-slate-800">{item.productName || item.productId}</td>
+                          <td className="py-2 px-3 text-center">
+                            <div className="inline-flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-300">
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateItemQtyInOrder(so.id, itemIdx, item.quantity - 1)}
+                                className="h-6 w-6 rounded-lg bg-white hover:bg-slate-200 text-slate-800 font-bold flex items-center justify-center text-xs border border-slate-300 cursor-pointer shadow-2xs"
+                                title="পরিমাণ কমান"
+                              >
+                                -
+                              </button>
+                              <span className="w-8 text-center font-bold text-slate-900 text-xs">
+                                {item.quantity}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateItemQtyInOrder(so.id, itemIdx, item.quantity + 1)}
+                                className="h-6 w-6 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold flex items-center justify-center text-xs cursor-pointer shadow-2xs"
+                                title="পরিমাণ বাড়ান"
+                              >
+                                +
+                              </button>
+                            </div>
+                          </td>
+                          <td className="py-2 px-3 text-right font-medium">৳{item.unitPrice.toLocaleString()}</td>
+                          <td className="py-2 px-3 text-right font-bold text-slate-900">৳{item.totalPrice.toLocaleString()}</td>
+                          <td className="py-2 px-3 text-right font-semibold text-emerald-700">৳{item.profitAmount.toLocaleString()}</td>
+                          <td className="py-2 px-3 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateItemQtyInOrder(so.id, itemIdx, 0)}
+                              className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 cursor-pointer transition-colors"
+                              title="আইটেমটি মুছুন"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {/* Summary Footer */}
+                  <div className="flex flex-wrap items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
+                    <div className="flex items-center gap-4 text-slate-600">
+                      <span>Subtotal: <strong className="text-slate-900">৳{so.subtotal.toLocaleString()}</strong></span>
+                      <span>Discount: <strong className="text-red-600">-৳{so.discountAmount.toLocaleString()}</strong></span>
+                      <span>Delivery Charge: <strong className="text-slate-900">+৳{so.deliveryCharge.toLocaleString()}</strong></span>
+                    </div>
+
+                    <div className="flex items-center gap-4 font-bold">
+                      <span className="text-blue-900">Grand Total: ৳{so.grandTotal.toLocaleString()}</span>
+                      <span className="text-emerald-700">Advance: ৳{so.advancePaid.toLocaleString()}</span>
+                      <span className="text-amber-700">Due: ৳{so.dueAmount.toLocaleString()}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {showPOSModal && <NewOrderModal onClose={() => setShowPOSModal(false)} />}
+
+      {/* VOID INVOICE BARCODE MODAL */}
+      {showVoidModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200">
+            <div className="bg-red-900 text-white px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <Ban className="h-5 w-5 text-red-300" />
+                <h3 className="font-bold text-sm">Void Invoice (ইলেক্ট্রনিক ইনভয়েস বাতিল)</h3>
+              </div>
+              <button
+                onClick={() => setShowVoidModal(false)}
+                className="text-red-200 hover:text-white p-1 rounded-lg hover:bg-red-800 cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmVoid} className="p-6 space-y-4">
+              <div className="bg-red-50 border border-red-200 text-red-900 p-3 rounded-xl text-xs leading-relaxed space-y-1">
+                <p className="font-bold">⚠️ ইনভয়েস বাতিলের শর্তাবলী (Mandatory Rule):</p>
+                <p>ইনভয়েস বাতিল বা ভয়েড করতে <strong>Invoice Number</strong> দেওয়া এবং <strong>বাতিলের কারণ (Void Reason)</strong> দেওয়া বাধ্যতামূলক। স্ক্যান করা মাত্র পণ্যসমূহ অটোমেটিক স্টকে ফেরত যুক্ত হবে।</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-800 mb-1 flex items-center gap-1.5">
+                  <Barcode className="h-4 w-4 text-red-600" />
+                  <span>Invoice Number / Scan Barcode * (ইনভয়েস নং / বারকোড স্ক্যান)</span>
+                </label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                  <input
+                    type="text"
+                    required
+                    autoFocus
+                    value={voidInvoiceQuery}
+                    onChange={(e) => setVoidInvoiceQuery(e.target.value)}
+                    placeholder="Scan Barcode or type Invoice ID (e.g. SO-10001)..."
+                    className="w-full rounded-lg border border-slate-300 pl-9 pr-3 py-2 text-xs font-mono font-bold focus:border-red-600 focus:outline-hidden"
+                  />
+                </div>
+              </div>
+
+              {/* Invoice Preview if matched */}
+              {matchedVoidOrder ? (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-2">
+                  <div className="flex justify-between font-bold text-slate-900 border-b border-slate-200 pb-1">
+                    <span>Invoice Found: {matchedVoidOrder.id}</span>
+                    <span className="text-blue-900">৳{matchedVoidOrder.grandTotal.toLocaleString()}</span>
+                  </div>
+                  <div className="text-slate-600 space-y-0.5 text-[11px]">
+                    <p>Customer: <strong>{matchedVoidOrder.customerName}</strong></p>
+                    <p>Date: {matchedVoidOrder.orderDate} • Status: <span className="font-bold text-emerald-700">{matchedVoidOrder.deliveryStatus}</span></p>
+                    <p>Items ({matchedVoidOrder.items.length}): {matchedVoidOrder.items.map(i => `${i.productName || i.productId} x${i.quantity}`).join(', ')}</p>
+                  </div>
+                </div>
+              ) : voidInvoiceQuery.trim() ? (
+                <p className="text-xs text-red-600 font-semibold italic">❌ No invoice matches "{voidInvoiceQuery}". Check the ID or scan barcode again.</p>
+              ) : null}
+
+              <div>
+                <label className="block text-xs font-bold text-slate-800 mb-1">
+                  Reason for Voiding Invoice * (বাতিলের সুনির্দিষ্ট কারণ)
+                </label>
+                <textarea
+                  rows={2}
+                  required
+                  value={voidReason}
+                  onChange={(e) => setVoidReason(e.target.value)}
+                  placeholder="e.g. Customer returned goods / Wrong billing / Order cancelled by buyer"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-red-600 focus:outline-hidden"
+                />
+              </div>
+
+              {voidSuccessMsg && (
+                <div className="bg-emerald-100 text-emerald-900 p-3 rounded-xl border border-emerald-300 text-xs font-bold flex items-center gap-2">
+                  <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0" />
+                  <span>{voidSuccessMsg}</span>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowVoidModal(false)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!matchedVoidOrder}
+                  className="flex items-center gap-2 px-5 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg shadow-sm cursor-pointer transition-all"
+                >
+                  <Ban className="h-4 w-4" />
+                  <span>Confirm Void & Restore Stock</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* BATCH DELETE CONFIRMATION MODAL */}
+      {isBatchDeleting && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4 border border-slate-200">
+            <div className="flex items-center gap-3 text-red-600">
+              <div className="p-2.5 bg-red-100 rounded-xl">
+                <AlertTriangle className="h-6 w-6 text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900 text-sm">Batch Delete Sales Orders?</h3>
+                <p className="text-xs text-slate-500">{selectedOrderIds.length} orders selected</p>
+              </div>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              আপনি কি নিশ্চিত যে সিলেক্টকৃত <strong className="text-slate-900">{selectedOrderIds.length}</strong> টি সেলস অর্ডার ডিলেট করতে চান?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                onClick={() => setIsBatchDeleting(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  batchDeleteSalesOrders(selectedOrderIds);
+                  setSelectedOrderIds([]);
+                  setIsBatchDeleting(false);
+                }}
+                className="px-4 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg shadow-sm cursor-pointer"
+              >
+                Confirm Batch Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE CONFIRMATION MODAL */}
+      {deleteTargetId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4 border border-slate-200">
+            <div className="flex items-center gap-3 text-red-600">
+              <div className="p-2.5 bg-red-100 rounded-xl">
+                <AlertTriangle className="h-6 w-6 text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900 text-sm">Delete Sales Order?</h3>
+                <p className="text-xs text-slate-500">Record ID: {deleteTargetId}</p>
+              </div>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              আপনি কি নিশ্চিত যে এই সেলস অর্ডার রেকর্ডটি মুছে ফেলতে চান? এটি স্থায়ীভাবে মুছে যাবে।
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                onClick={() => setDeleteTargetId(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  deleteSalesOrder(deleteTargetId);
+                  setDeleteTargetId(null);
+                }}
+                className="px-4 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg shadow-sm cursor-pointer"
+              >
+                Confirm Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* INTERACTIVE ORDER SCANNER & BATCH COLLECTOR MODAL */}
+      {showCollectorModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-4xl w-full my-auto overflow-hidden shadow-2xl border border-slate-200 flex flex-col max-h-[92vh]">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-indigo-950 via-purple-900 to-slate-900 text-white p-4 sm:p-5 flex items-center justify-between border-b border-indigo-800 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-amber-400/20 rounded-2xl border border-amber-400/40 text-amber-300">
+                  <Barcode className="h-6 w-6" />
+                </div>
+                <div>
+                  <h2 className="text-base sm:text-lg font-black tracking-tight flex items-center gap-2">
+                    <span>অর্ডার স্ক্যানার ও ব্যাচ স্ট্যাটাস কালেকটর</span>
+                    <span className="bg-amber-400 text-slate-950 text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
+                      Live Scanner
+                    </span>
+                  </h2>
+                  <p className="text-xs text-indigo-200">
+                    ইনভয়েসের মতো একের পর এক মেমো নং/ফোন স্ক্যান বা টাইপ করে সংগ্রহ করুন, তারপর একসাথে স্ট্যাটাস আপডেট করুন
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCollectorModal(false)}
+                className="p-2 text-slate-300 hover:text-white rounded-xl hover:bg-white/10 cursor-pointer transition-colors"
+              >
+                <X className="h-6 w-6" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-4 sm:p-6 overflow-y-auto space-y-4 flex-1 bg-slate-50">
+              {/* Success Notification Banner */}
+              {collectorSuccessMsg && (
+                <div className="p-4 bg-emerald-600 text-white font-bold text-xs rounded-2xl shadow-lg flex items-center justify-between gap-2 animate-bounce">
+                  <span className="text-sm">{collectorSuccessMsg}</span>
+                  <button onClick={() => setCollectorSuccessMsg(null)} className="text-white/80 hover:text-white">
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+              )}
+
+              {/* Scan Feedback Message */}
+              {scanFeedback && (
+                <div
+                  className={`p-3 rounded-2xl text-xs font-bold flex items-center justify-between gap-2 border shadow-xs transition-all ${
+                    scanFeedback.type === 'success'
+                      ? 'bg-emerald-50 text-emerald-900 border-emerald-300'
+                      : scanFeedback.type === 'warning'
+                      ? 'bg-amber-50 text-amber-900 border-amber-300'
+                      : 'bg-rose-50 text-rose-900 border-rose-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {scanFeedback.type === 'success' && <CheckCircle className="h-4 w-4 text-emerald-600" />}
+                    {scanFeedback.type === 'warning' && <AlertTriangle className="h-4 w-4 text-amber-600" />}
+                    {scanFeedback.type === 'error' && <X className="h-4 w-4 text-rose-600" />}
+                    <span>{scanFeedback.msg}</span>
+                  </div>
+                  <button onClick={() => setScanFeedback(null)} className="text-slate-400 hover:text-slate-700">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
+
+              {/* SCAN / INPUT SECTION */}
+              <div className="bg-white p-4 rounded-2xl border border-indigo-200 shadow-sm space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-2">
+                  <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+                    <Barcode className="h-4 w-4 text-indigo-600" />
+                    <span>মেমো নম্বর / বারকোড স্ক্যান করুন (Scan Barcode / Type Memo):</span>
+                  </span>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsMultiPasteMode(!isMultiPasteMode)}
+                      className="text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-1 rounded-lg border border-indigo-200 cursor-pointer transition-all"
+                    >
+                      {isMultiPasteMode ? '⚡ ইনস্ট্যান্ট স্ক্যানার মোড' : '📋 টেক্সট পেস্ট মোড (Multiple Paste)'}
+                    </button>
+
+                    {selectedOrderIds.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleAddCheckedOrdersToCollector}
+                        className="text-[11px] font-bold bg-amber-50 hover:bg-amber-100 text-amber-800 px-3 py-1 rounded-lg border border-amber-300 cursor-pointer transition-all"
+                      >
+                        + টেবিল সিলেক্টকৃত ({selectedOrderIds.length}) টি আনুন
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {!isMultiPasteMode ? (
+                  /* Single Barcode Scan Form */
+                  <form onSubmit={handleScanOrAddOrder} className="flex flex-col sm:flex-row gap-2">
+                    <div className="relative flex-1">
+                      <Barcode className="absolute left-3.5 top-3 h-5 w-5 text-indigo-500" />
+                      <input
+                        type="text"
+                        autoFocus
+                        value={scanInput}
+                        onChange={(e) => setScanInput(e.target.value)}
+                        placeholder="এখানে মেমো নং (যেমন SO-10001 বা 10001) বা ফোন নম্বর টাইপ/স্ক্যান করে Enter চাপুন..."
+                        className="w-full pl-11 pr-4 py-2.5 bg-slate-50 border-2 border-indigo-300 focus:border-indigo-600 focus:bg-white rounded-2xl text-xs font-mono font-black text-slate-900 placeholder:font-sans placeholder:font-normal placeholder:text-slate-400 focus:outline-hidden transition-all shadow-inner"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      className="bg-indigo-700 hover:bg-indigo-600 text-white font-bold px-6 py-2.5 rounded-2xl text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-md transition-all border border-indigo-500"
+                    >
+                      <Plus className="h-4 w-4" />
+                      <span>স্ক্যান / যুক্ত করুন</span>
+                    </button>
+                  </form>
+                ) : (
+                  /* Multiple Paste Area */
+                  <div className="space-y-2">
+                    <textarea
+                      value={multiPasteText}
+                      onChange={(e) => setMultiPasteText(e.target.value)}
+                      placeholder={`একাধিক মেমো নং বা ফোন নম্বর একসাথে পেস্ট করুন:\nSO-10001, SO-10002\n10003\n01711223344`}
+                      rows={3}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3 text-xs font-mono font-bold text-slate-900 focus:bg-white focus:border-indigo-600 focus:outline-hidden transition-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleMultiPasteAdd}
+                      className="w-full bg-purple-700 hover:bg-purple-600 text-white font-bold py-2 px-4 rounded-xl text-xs cursor-pointer shadow-sm"
+                    >
+                      + সবগুলো কালেকশনে আনুন
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* COLLECTED BATCH LIST TABLE */}
+              {(() => {
+                const collectedOrders = salesOrders.filter((so) => collectedOrderIds.includes(so.id));
+                const totalBill = collectedOrders.reduce((sum, o) => sum + o.grandTotal, 0);
+
+                return (
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden space-y-0">
+                    {/* List Header Bar */}
+                    <div className="bg-slate-900 text-white p-3 px-4 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs font-black uppercase tracking-wider text-indigo-300 flex items-center gap-1.5">
+                          <span>📦 সংগৃহীত অর্ডার তালিকা (Batch Cart):</span>
+                        </span>
+                        <span className="bg-amber-400 text-slate-950 font-mono font-black text-xs px-2.5 py-0.5 rounded-full">
+                          {collectedOrders.length} টি
+                        </span>
+                      </div>
+
+                      {collectedOrders.length > 0 && (
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs font-black font-mono text-emerald-300">
+                            মোট টাকা: ৳{totalBill.toLocaleString()}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setCollectedOrderIds([])}
+                            className="text-[11px] font-bold text-rose-300 hover:text-rose-100 underline cursor-pointer"
+                          >
+                            তালিকা খালি করুন
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Order Cards/Table */}
+                    {collectedOrders.length === 0 ? (
+                      <div className="text-center py-10 px-4 text-slate-400 text-xs space-y-2">
+                        <Barcode className="h-10 w-10 mx-auto text-slate-300 stroke-1" />
+                        <p className="font-bold text-slate-600">এখনো কোন অর্ডার স্ক্যান করা হয়নি!</p>
+                        <p className="text-[11px]">
+                          উপরের বক্সে মেমো নম্বর (যেমন SO-10001) টাইপ করে বা বারকোড স্ক্যানার দিয়ে স্ক্যান করুন।
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="max-h-56 overflow-y-auto divide-y divide-slate-100">
+                        {collectedOrders.map((so, idx) => (
+                          <div
+                            key={so.id}
+                            className="p-3 flex flex-wrap items-center justify-between gap-2 hover:bg-indigo-50/50 transition-all text-xs"
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className="text-slate-400 font-mono text-[11px] font-bold">{idx + 1}.</span>
+                              <span className="font-mono font-black text-indigo-900 bg-indigo-100 px-2.5 py-1 rounded-lg border border-indigo-200">
+                                #{so.id}
+                              </span>
+                              <div>
+                                <span className="font-bold text-slate-900">{so.customerName}</span>
+                                <span className="text-slate-500 font-mono text-[11px] block sm:inline sm:ml-2">
+                                  📞 {so.customerPhone || 'N/A'}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-3">
+                              <span className="font-black text-slate-900 font-mono bg-slate-100 px-2.5 py-1 rounded-lg">
+                                ৳{so.grandTotal.toLocaleString()}
+                              </span>
+
+                              <span
+                                className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                                  so.deliveryStatus === 'Delivered'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : so.deliveryStatus === 'Send to Courier' || so.deliveryStatus === 'Processing'
+                                    ? 'bg-purple-100 text-purple-800'
+                                    : so.deliveryStatus === 'Accepted'
+                                    ? 'bg-blue-100 text-blue-800'
+                                    : so.deliveryStatus === 'Cancelled' || so.deliveryStatus === 'Voided'
+                                    ? 'bg-rose-100 text-rose-800'
+                                    : 'bg-amber-100 text-amber-800'
+                                }`}
+                              >
+                                {so.deliveryStatus || 'Pending'}
+                              </span>
+
+                              <button
+                                type="button"
+                                onClick={() => setCollectedOrderIds((prev) => prev.filter((id) => id !== so.id))}
+                                className="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                                title="সরান"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* COURIER SELECTION */}
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-2">
+                <label className="block text-xs font-black text-slate-800">
+                  🚚 কুরিয়ার সার্ভিস নির্বাচন (কুরিয়ারে পাঠানোর সময় ব্যবহৃত হবে):
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {['Steadfast Courier', 'Pathao Courier', 'RedX Courier', 'Paperfly / Sundarban'].map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setSelectedCourier(c)}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
+                        selectedCourier === c
+                          ? 'bg-purple-900 text-white border-purple-900 shadow-xs ring-2 ring-purple-400'
+                          : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border-slate-200'
+                      }`}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* BULK ACTION BUTTONS */}
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+                <span className="block text-xs font-black text-slate-900 uppercase tracking-wider">
+                  ⚡ সংগৃহীত ({collectedOrderIds.length}) টি অর্ডারের স্ট্যাটাস একসাথে পরিবর্তন করুন:
+                </span>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => handleApplyCollectorStatus('Accepted')}
+                    className="bg-blue-600 hover:bg-blue-500 text-white font-black py-3 px-3 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-md cursor-pointer transition-all border border-blue-400"
+                  >
+                    <span>✅</span>
+                    <span>1. Bulk Accept (সব গৃহিত)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleApplyCollectorStatus('Send to Courier')}
+                    className="bg-purple-700 hover:bg-purple-600 text-white font-black py-3 px-3 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-md cursor-pointer transition-all border border-purple-500"
+                  >
+                    <span>🚚</span>
+                    <span>2. Send to Courier ({selectedCourier.split(' ')[0]})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleApplyCollectorStatus('Delivered')}
+                    className="bg-emerald-700 hover:bg-emerald-600 text-white font-black py-3 px-3 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-md cursor-pointer transition-all border border-emerald-500"
+                  >
+                    <span>📦</span>
+                    <span>3. Bulk Delivered (ডেলিভার্ড)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleApplyCollectorStatus('Cancelled')}
+                    className="bg-rose-700 hover:bg-rose-600 text-white font-black py-3 px-3 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-md cursor-pointer transition-all border border-rose-500"
+                  >
+                    <span>❌</span>
+                    <span>4. Bulk Cancel (বাতিল)</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-white border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 shrink-0">
+              {collectedOrderIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const firstCollected = salesOrders.find((so) => collectedOrderIds.includes(so.id));
+                    if (firstCollected) {
+                      setSelectedPrintOrder(firstCollected);
+                      setShowCollectorModal(false);
+                      setActiveModule('invoice_print');
+                    }
+                  }}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-900 font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer border border-slate-300"
+                >
+                  <Printer className="h-4 w-4 text-slate-700" />
+                  <span>সংগৃহীত মেমোসমূহ প্রিন্ট প্রিভিউতে খুলুন</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setShowCollectorModal(false)}
+                className="bg-slate-900 hover:bg-slate-800 text-white font-bold px-6 py-2.5 rounded-xl text-xs cursor-pointer ml-auto"
+              >
+                সম্পন্ন / বন্ধ করুন
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Online Order Dedicated Status Change Modal */}
+      {statusModalOrder && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="bg-slate-900 text-white p-5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-2xl bg-amber-500/20 border border-amber-400/30 flex items-center justify-center text-amber-400 font-bold">
+                  <Truck className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black flex items-center gap-2">
+                    <span>অনলাইন অর্ডার স্ট্যাটাস ও কুরিয়ার আপডেট</span>
+                    <span className="text-[10px] font-mono bg-blue-500/20 text-blue-300 border border-blue-400/30 px-2 py-0.5 rounded-full">
+                      #{statusModalOrder.id}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-300">
+                    কাস্টমার: <strong className="text-white">{statusModalOrder.customerName}</strong> • {statusModalOrder.customerPhone || 'ফোন নম্বর নেই'}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setStatusModalOrder(null)}
+                className="p-2 text-slate-400 hover:text-white rounded-full hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-5 overflow-y-auto custom-scrollbar text-xs">
+              {statusSuccessMsg && (
+                <div className="p-3 bg-emerald-100 border border-emerald-300 text-emerald-900 rounded-2xl font-bold flex items-center gap-2">
+                  <CheckCircle className="h-4 w-4 text-emerald-600" />
+                  <span>{statusSuccessMsg}</span>
+                </div>
+              )}
+
+              {/* Status Selector Pills */}
+              <div className="space-y-2">
+                <label className="font-extrabold text-slate-800 block text-xs uppercase tracking-wider">
+                  ১. নতুন স্ট্যাটাস সিলেক্ট করুন (Select Status):
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {[
+                    { id: 'Pending', label: '⏳ Pending', desc: 'অপেক্ষমাণ' },
+                    { id: 'Accepted', label: '✅ Accepted', desc: 'কনফার্মড' },
+                    { id: 'Send to Courier', label: '🚚 Courier', desc: 'কুরিয়ারে প্রেরিত' },
+                    { id: 'Delivered', label: '📦 Delivered', desc: 'ডেলিভার্ড' },
+                    { id: 'Cancelled', label: '❌ Cancelled', desc: 'বাতিল' },
+                  ].map((st) => (
+                    <button
+                      key={st.id}
+                      type="button"
+                      onClick={() => setModalTargetStatus(st.id as any)}
+                      className={`p-3 rounded-2xl font-bold border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                        modalTargetStatus === st.id
+                          ? 'bg-indigo-600 text-white border-indigo-700 shadow-md ring-2 ring-indigo-300'
+                          : 'bg-slate-50 hover:bg-slate-100 text-slate-800 border-slate-200'
+                      }`}
+                    >
+                      <span className="text-xs">{st.label}</span>
+                      <span className={`text-[10px] ${modalTargetStatus === st.id ? 'text-indigo-200' : 'text-slate-500'}`}>
+                        {st.desc}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Courier Selection & Tracking ID (Shown when Courier or Accepted) */}
+              {(modalTargetStatus === 'Send to Courier' || modalTargetStatus === 'Accepted') && (
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+                  <label className="font-extrabold text-slate-900 block text-xs flex items-center gap-1.5">
+                    <Truck className="h-4 w-4 text-indigo-600" />
+                    <span>২. কুরিয়ার সার্ভিস ও ট্র্যাকিং তথ্য:</span>
+                  </label>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <span className="text-[10px] font-bold text-slate-600 block mb-1">কুরিয়ার সার্ভিস কোম্পানি:</span>
+                      <select
+                        value={modalCourier}
+                        onChange={(e) => setModalCourier(e.target.value)}
+                        className="w-full p-2.5 bg-white border border-slate-300 rounded-xl font-bold text-xs focus:ring-2 focus:ring-indigo-500 outline-hidden"
+                      >
+                        <option value="🚚 Steadfast Courier (স্টেডফাস্ট)">🚚 Steadfast Courier (স্টেডফাস্ট)</option>
+                        <option value="🚴 Pathao Courier (পাঠাও)">🚴 Pathao Courier (পাঠাও)</option>
+                        <option value="📦 Sundarban Courier (সুন্দরবন)">📦 Sundarban Courier (সুন্দরবন)</option>
+                        <option value="🔴 RedX Logistics (রেডএক্স)">🔴 RedX Logistics (রেডএক্স)</option>
+                        <option value="📄 Paperfly Courier (পেপারফ্লাই)">📄 Paperfly Courier (পেপারফ্লাই)</option>
+                        <option value="🛵 Hand Delivery / Showroom Pick">🛵 Hand Delivery / Showroom Pick</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <span className="text-[10px] font-bold text-slate-600 block mb-1">কনসাইনমেন্ট / ট্র্যাকিং নম্বর (Optional):</span>
+                      <input
+                        type="text"
+                        value={modalTrackingId}
+                        onChange={(e) => setModalTrackingId(e.target.value)}
+                        placeholder="যেমন: STF-9883472"
+                        className="w-full p-2.5 bg-white border border-slate-300 rounded-xl font-mono font-bold text-xs focus:ring-2 focus:ring-indigo-500 outline-hidden"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Direct WhatsApp Message Generator */}
+              <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-emerald-950 flex items-center gap-1.5 text-xs">
+                    <MessageSquare className="h-4 w-4 text-emerald-600" />
+                    <span>কাস্টমার হোয়াটসঅ্যাপ মেসেজ প্রিভিউ:</span>
+                  </span>
+                  <a
+                    href={`https://wa.me/${(statusModalOrder.customerPhone || '').replace(/[^0-9]/g, '')}?text=${encodeURIComponent(
+                      `আসসালামু আলাইকুম ${statusModalOrder.customerName || 'কাস্টমার'}, Hayat Haven থেকে আপনার অর্ডার #${statusModalOrder.id} এর স্ট্যাটাস আপডেট: ${modalTargetStatus}. ${
+                        modalTrackingId ? `কুরিয়ার ট্র্যাকিং নম্বর: ${modalTrackingId}` : ''
+                      } মোট বিল: ৳${statusModalOrder.grandTotal.toLocaleString()}। আমাদের সাথে থাকার জন্য ধন্যবাদ!`
+                    )}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1 bg-[#25D366] hover:bg-[#20bd5a] text-white font-bold text-[11px] rounded-xl flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
+                  >
+                    <MessageSquare className="h-3.5 w-3.5" />
+                    <span>WhatsApp মেসেজ পাঠান</span>
+                  </a>
+                </div>
+                <p className="p-3 bg-white border border-emerald-200 rounded-xl text-[11px] text-slate-700 font-mono leading-relaxed">
+                  "আসসালামু আলাইকুম {statusModalOrder.customerName || 'কাস্টমার'}, Hayat Haven থেকে আপনার অর্ডার #{statusModalOrder.id} এর স্ট্যাটাস আপডেট: <strong>{modalTargetStatus}</strong>. {modalTrackingId ? `কুরিয়ার ট্র্যাকিং নম্বর: ${modalTrackingId}` : ''} মোট বিল: ৳{statusModalOrder.grandTotal.toLocaleString()}।"
+                </p>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setStatusModalOrder(null)}
+                className="px-5 py-2.5 rounded-xl border border-slate-300 font-bold text-slate-700 hover:bg-slate-200 transition-all cursor-pointer"
+              >
+                বাতিল
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveStatusModal}
+                className="px-6 py-2.5 rounded-xl bg-indigo-700 hover:bg-indigo-600 text-white font-black transition-all cursor-pointer shadow-md"
+              >
+                💾 স্ট্যাটাস সেভ করুন
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

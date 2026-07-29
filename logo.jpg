@@ -1,0 +1,34 @@
+# 07. Backup, Restore & Disaster Recovery Guide
+
+## 💾 Backup Procedures
+
+### 1. Automated Cloud Backups (Firestore Managed)
+Google Cloud Firestore performs continuous point-in-time recovery (PITR) and automated daily snapshots.
+To trigger an on-demand Firestore export via GCP CLI:
+```bash
+gcloud firestore export gs://hayat-haven-backups/$(date +%Y-%m-%d) --project=galvanized-kite-ljk7s
+```
+
+---
+
+### 2. Manual JSON State Export (In-App)
+Admins can download an offline JSON backup directly from **App Settings**:
+1. Log in as **Admin**.
+2. Navigate to **App Settings** / **Company Settings**.
+3. Click **"Download Full System Backup (JSON)"**.
+4. Save the encrypted `.json` file securely on an external drive or cloud drive.
+
+---
+
+## ↺ Restoration & Disaster Recovery Procedure
+
+### Scenario A: Network Outage / Database Unreachable
+- The system automatically degrades gracefully to offline LocalStorage mode.
+- Transactions logged offline are queued in `offlineSyncQueue`.
+- Once connectivity is restored, click **"Sync Offline Queue"** in the top navigation header.
+
+### Scenario B: Accidental Data Corruption or Bulk Deletion
+1. Open **App Settings** ➔ **Data Recovery / Restore**.
+2. Upload the latest valid `.json` backup file.
+3. System validates entity structural integrity and prompts confirmation.
+4. Click **"Confirm Restore Data"** to overwrite corrupt records with clean historical data.
